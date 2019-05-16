@@ -1,0 +1,3 @@
+[submodule "vendor/simdcomp"]
+	path = vendor/simdcomp
+	url = https://github.com/lemire/simdcomp
