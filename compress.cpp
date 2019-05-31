@@ -14,13 +14,13 @@
 #include "compress.hpp"
 
 #ifdef DEBUG
-    #define dbg(...) do {\
-        printf("  ");\
-        printf(__VA_ARGS__);\
-        printf("\n");\
-    } while(0)
+#define dbg(...) do {\
+    printf("  ");\
+    printf(__VA_ARGS__);\
+    printf("\n");\
+} while(0)
 #else
-    #define dbg(...) do {} while(0);
+#define dbg(...) do {} while(0);
 #endif
 
 #define writebig(buf, offset, size, x) do {\
@@ -204,8 +204,10 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
 }
 
 void print_usage() {
-    printf("Usage: bin/compress [-b] infile compressed\n");
-    printf("  -b\tTakes infile as a binary file of 16-bit integers\n");
+    printf("Usage: compress [-b/i] in compressed\n");
+    printf("  Compresses `in', a newline-separated list of numbers, into `compressed'");
+    printf("  -b\tTakes in as a binary file of 16-bit integers\n");
+    printf("  -i\tTakes in as a newline-separated list of text integers\n");
 }
 
 int main(const int argc, const char *argv[]) {
@@ -263,17 +265,15 @@ int main(const int argc, const char *argv[]) {
     std::ofstream ofs(outfile, std::ios::binary);
     if (!ofs) return 1; // fail
 
-    // Set up timer
     auto start = std::chrono::steady_clock::now();
-
     int64_t outlen = deltacode(inbuf, bytes, outbuf);
-
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<double> diff = end - start;
+
     ofs.write(outbuf, outlen);
     ofs.close();
     free(outbuf);
 
-    printf("Finished in %f s. \U000026A1\n", diff.count());
+    printf("Compressed in %f s. \U000026A1\n", diff.count());
     return 0;
 }

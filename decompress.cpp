@@ -8,6 +8,16 @@
 
 #include "decompress.hpp"
 
+#ifdef DEBUG
+#define dbg(...) do {\
+    printf("  ");\
+    printf(__VA_ARGS__);\
+    printf("\n");\
+} while(0)
+#else
+#define dbg(...) do {} while(0);
+#endif
+
 struct header {
     uint32_t indexsize;
     uint32_t numints;
@@ -36,6 +46,13 @@ size_t readheader(char* inbuf, struct header* h) {
     return offset;
 }
 
+size_t get_numints(char* inbuf) {
+    struct header h;
+    readheader(inbuf, &h);
+
+    return h.numints;
+}
+
 int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
     // What follows could probably be a macro.
     size_t offset = 0;
@@ -43,6 +60,7 @@ int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
     struct header h;
 
     offset += readheader(inbuf, &h);
+    dbg("%d segments, %d outliers", h.indexsize, h.outliersize);
 
     uint32_t* indices = reinterpret_cast<uint32_t*>(inbuf + offset);
     offset += h.indexsize * sizeof(uint32_t);
@@ -93,21 +111,58 @@ int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
     return h.numints * sizeof(uint16_t);
 }
 
+void print_usage() {
+    printf("Usage: decompress [-b/i] in decompressed\n");
+    printf("  Decompresses `in' into `decompressed', a newline-separated list of integers");
+    printf("  -b\tWrites a binary file of 16-bit integers\n");
+    printf("  -i\tPerforms the default action. This flag has no effect.\n");
+}
+
+enum Mode { mode_binary, mode_ints, mode_floats, mode_default };
+
 int main(const int argc, const char *argv[]) {
-    std::ifstream ifs(argv[1], std::ios::binary);
+    Mode mode;
+    if (argv[1][0] != '-') {
+        mode = mode_default;
+        printf("Working in text mode.");
+    } else if (argv[1][1] == 'b' && argv[1][2] == '\0') {
+        mode = mode_binary;
+        printf("Working in binary mode.");
+    } else if (argv[1][1] == 'i' && argv[1][2] == '\0') {
+        mode = mode_ints;
+        printf("Working in text mode.");
+    } else {
+        printf("Unknown flag.\n");
+        print_usage();
+        exit(1);
+    }
+    std::ifstream ifs(mode == mode_default ? argv[1] : argv[2], std::ios::binary);
     std::vector<char> inbuf(std::istreambuf_iterator<char>(ifs), {});
     ifs.close();
 
-    // Allocate 20 times the space we got
-    char* outbuf = (char*)malloc(sizeof(char) * 10000000);
-    std::ofstream ofs(argv[2], std::ios::binary);
+    const size_t numints = get_numints(inbuf.data());
+    uint16_t* outbuf = (uint16_t*)malloc(sizeof(uint16_t) * numints);
+    dbg("Decompressing %zu ints", numints);
+    std::ofstream ofs(mode == mode_default ? argv[2] : argv[3], std::ios::binary);
     if (!ifs || !ofs) return 1; // fail
 
+    auto start = std::chrono::steady_clock::now();
     int64_t outlen = deltadecode(inbuf.data(), inbuf.size(), (uint16_t*)outbuf);
-    ofs.write(outbuf, outlen);
+    auto end = std::chrono::steady_clock::now();
+    std::chrono::duration<double> diff = end - start;
+
+    if (mode == mode_binary) {
+        // binary mode
+        ofs.write((char*)outbuf, outlen);
+    } else {
+        // text int mode
+        for (int i = 0; i < outlen/sizeof(uint16_t); i++) {
+            ofs << outbuf[i] << '\n';
+        }
+    }
     free(outbuf);
     ofs.close();
 
-    printf("Printed to where it's s'possed to go! \U000026A1\n");
+    printf("Decompressed in %f s. \U000026A1\n", diff.count());
     return 0;
 }
