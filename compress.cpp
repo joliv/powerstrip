@@ -226,7 +226,7 @@ int main(const int argc, const char *argv[]) {
         std::ifstream ifs(argv[2], std::ios::binary);
         std::vector<char> v = std::vector(std::istreambuf_iterator<char>(ifs), {});
         ifs.close();
-        bytes = v.size();
+        bytes = v.size() * sizeof(uint16_t);
         inbuf = (uint16_t*)v.data();
     } else if (argv[1][0] == '-' && argv[1][1] == 'i' && argv[1][2] == '\0') {
         // text int mode
@@ -241,10 +241,10 @@ int main(const int argc, const char *argv[]) {
         std::ifstream ifs(argv[2]);
         std::vector<uint16_t> v(std::istream_iterator<uint16_t>(ifs), {});
         ifs.close();
-        bytes = v.size();
+        bytes = v.size() * sizeof(uint16_t);
         inbuf = v.data();
     } else {
-        // text float moad
+        // text float mode
         if (argc != 3) {
             print_usage();
             return 1;
@@ -257,7 +257,7 @@ int main(const int argc, const char *argv[]) {
         std::vector<double> doubles(std::istream_iterator<double>(ifs), {});
         ifs.close();
         std::vector<uint16_t> v(doubles.begin(), doubles.end());
-        bytes = v.size();
+        bytes = v.size() * sizeof(uint16_t);
         inbuf = v.data();
     }
 
