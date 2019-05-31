@@ -113,7 +113,7 @@ int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
 
 void print_usage() {
     printf("Usage: decompress [-b/i] in decompressed\n");
-    printf("  Decompresses `in' into `decompressed', a newline-separated list of integers");
+    printf("  Decompresses `in' into `decompressed', a newline-separated list of integers\n");
     printf("  -b\tWrites a binary file of 16-bit integers\n");
     printf("  -i\tPerforms the default action. This flag has no effect.\n");
 }

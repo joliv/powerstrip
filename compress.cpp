@@ -205,7 +205,7 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
 
 void print_usage() {
     printf("Usage: compress [-b/i] in compressed\n");
-    printf("  Compresses `in', a newline-separated list of numbers, into `compressed'");
+    printf("  Compresses `in', a newline-separated list of numbers, into `compressed'\n");
     printf("  -b\tTakes in as a binary file of 16-bit integers\n");
     printf("  -i\tTakes in as a newline-separated list of text integers\n");
 }
