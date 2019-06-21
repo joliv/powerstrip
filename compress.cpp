@@ -41,10 +41,20 @@ uint16_t get_zeroval(const uint16_t* inbuf, const size_t numints) {
         }
     }
     free(histogram);
-    if (10 * common_count < numints) {
+    // if (10 * common_count > numints) {
         return common;
+    // }
+    // return UINT16_MAX; // no floor with >10% of samples found
+}
+
+double measure_err(const uint16_t* inbuf, const size_t numints, const uint16_t zeroval, const uint16_t zerothresh) {
+    double sumerr = 0;
+    for (size_t i = 0; i < numints; i++) {
+        if (inbuf[i] <= zerothresh) {
+            sumerr += std::abs(inbuf[i] - zeroval);
+        }
     }
-    return UINT16_MAX;
+    return sumerr / (double)numints;
 }
 
 // Simple delta encoding. See how lemire/simdcomp does this fast?
@@ -87,7 +97,6 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
     const size_t numints = insize / 2; // 2 bytes per uint16
     dbg("Encoding %zu ints", numints);
 
-    // const uint16_t zeroval = 0, zerothresh = 0;
     uint16_t zeroval = get_zeroval(inbuf, numints);
     uint16_t zerothresh = zeroval + 5; // Sure, let's say +5W for now
 
@@ -96,8 +105,10 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
         zeroval = 0;
         zerothresh = 0;
         dbg("No floor found. Falling back to lossless");
+        dbg("RMSE will be 0 watts");
     } else {
         dbg("Floor found at %d watts", zeroval);
+        dbg("RMSE will be %f watts", measure_err(inbuf, numints, zeroval, zerothresh));
     }
 
     std::vector<uint32_t> indices;
@@ -126,7 +137,7 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
     }
 
     assert(indices.size() == lengths.size());
-    dbg("%zu non-zero sections", indices.size());
+    dbg("%zu non-zero section(s) with sum length %d", indices.size(), sig_len);
 
     int32_t* sigs = (int32_t*)malloc(sig_len * sizeof(int32_t));
     size_t sig_needle = 0;
@@ -139,21 +150,33 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
 
     delta_encode(sigs, sig_len);
 
-    int32_t* percentiles = (int32_t*)malloc(sig_len * sizeof(int32_t));
-    memcpy(percentiles, sigs, sig_len * sizeof(int32_t));
+    size_t* bitcounts = (size_t*)calloc(17, sizeof(size_t));
 
-    // TODO: what if we want to look at less than the 99th percentile?
-    std::nth_element(percentiles, percentiles + (sig_len * 99)/100, percentiles + sig_len);
-    const int32_t p99 = percentiles[(sig_len*99)/100];
-    std::nth_element(percentiles, percentiles + sig_len/100, percentiles + (sig_len * 99)/100);
-    const int32_t p01 = percentiles[sig_len/100];
-    dbg("Middle 98%% of deltas is [%d, %d]", p01, p99);
+    for (size_t i = 0; i < sig_len; i++) {
+        // assert((size_t)std::log2(std::abs(sigs[i])) + 1 + 1 <= 16);
+        if (sigs[i] == 0) { // log2(0) = -inf
+            bitcounts[1]++;
+        } else {
+            // Ceiling of log2(bound), plus one for the sign bit
+            bitcounts[(size_t)std::log2(std::abs(sigs[i])) + 1 + 1]++;
+        }
+    }
 
-    free(percentiles);
+    size_t bestbits = 0;
+    size_t bestbittotal = SIZE_MAX;
+    dbg("bits per int/total bits");
+    for (size_t i = 1; i <= 16; i++) {
+        size_t totalbits = i * bitcounts[i] + 32 * (sig_len - bitcounts[i]);
+        dbg("  %zu/%zu", i, totalbits);
+        if (totalbits < bestbittotal) {
+            bestbittotal = totalbits;
+            bestbits = i;
+        }
+    }
 
-    const uint16_t bound = std::max(std::abs(p99), std::abs(p01));
     // Ceiling of log2(bound), plus one for the sign bit
-    const uint32_t bits_needed = (uint32_t)std::log2(bound) + 1 + 1;
+    const uint32_t bits_needed = (uint32_t)bestbits;
+    const uint16_t bound = 1 << (bits_needed - 1);
     dbg("Bit-packing with %d bits", bits_needed);
 
     // marker is 00..0011...11 with bits_needed 1s
@@ -226,7 +249,7 @@ int main(const int argc, const char *argv[]) {
         std::ifstream ifs(argv[2], std::ios::binary);
         std::vector<char> v = std::vector(std::istreambuf_iterator<char>(ifs), {});
         ifs.close();
-        bytes = v.size() * sizeof(uint16_t);
+        bytes = v.size();
         inbuf = (uint16_t*)v.data();
     } else if (argv[1][0] == '-' && argv[1][1] == 'i' && argv[1][2] == '\0') {
         // text int mode
