@@ -31,7 +31,7 @@
 // One pass to find the noise floor, basically just the mode
 uint16_t get_zeroval(const uint16_t* inbuf, const size_t numints) {
     uint16_t common = 0;
-    uint16_t common_count = 0;
+    size_t common_count = 0;
     size_t* histogram = (size_t*)calloc(UINT16_MAX+1, sizeof(size_t));
     for (size_t i = 0; i < numints; i++) {
         histogram[inbuf[i]]++;
@@ -41,10 +41,11 @@ uint16_t get_zeroval(const uint16_t* inbuf, const size_t numints) {
         }
     }
     free(histogram);
-    // if (10 * common_count > numints) {
+    dbg("Floor of %d is %zu/%zu total", common, common_count, numints);
+    if (10 * common_count > numints) {
         return common;
-    // }
-    // return UINT16_MAX; // no floor with >10% of samples found
+    }
+    return UINT16_MAX; // no floor with >10% of samples found
 }
 
 double measure_err(const uint16_t* inbuf, const size_t numints, const uint16_t zeroval, const uint16_t zerothresh) {
@@ -166,6 +167,7 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
     size_t bestbittotal = SIZE_MAX;
     dbg("bits per int/total bits");
     for (size_t i = 1; i <= 16; i++) {
+        bitcounts[i] += bitcounts[i-1];
         size_t totalbits = i * bitcounts[i] + 32 * (sig_len - bitcounts[i]);
         dbg("  %zu/%zu", i, totalbits);
         if (totalbits < bestbittotal) {
