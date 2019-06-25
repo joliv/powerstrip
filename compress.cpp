@@ -91,6 +91,7 @@ size_t writeheader(char* outbuf, size_t offset, struct header h) {
     writesmall(outbuf, offset, uint32_t, h.outliersize);
     writesmall(outbuf, offset, uint32_t, h.siglen);
     writesmall(outbuf, offset, uint8_t,  h.bitsneeded);
+    dbg("  Header: %zu", sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t));
     return offset;
 }
 
@@ -216,11 +217,17 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
     h.siglen = sig_len;
     h.bitsneeded = bits_needed;
 
+    dbg("Output sizes, in bytes");
+
     offset = writeheader(outbuf, offset, h);
 
+    dbg("  Indices: %zu", indices.size()  * sizeof(uint32_t));
     writebig(outbuf, offset, indices.size()  * sizeof(uint32_t), indices.data());
+    dbg("  Lengths: %zu", lengths.size()  * sizeof(uint32_t));
     writebig(outbuf, offset, lengths.size()  * sizeof(uint32_t), lengths.data());
+    dbg("  Outliers: %zu", outliers.size()  * sizeof(uint32_t));
     writebig(outbuf, offset, outliers.size() * sizeof(int32_t),  outliers.data());
+    dbg("  Packed data: %d", packed_bytes);
     writebig(outbuf, offset, packed_bytes, packed);
 
     free(packed);
