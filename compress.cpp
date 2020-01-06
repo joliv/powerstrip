@@ -6,7 +6,7 @@
 #include <vector>    // for vector
 #include <algorithm> // for max
 #include <string>    // for std::string
-#include <chrono>
+#include <chrono>    // timing, for debugging
 
 #include "emmintrin.h" // for __m128, intel intrinsic
 #include "vendor/simdcomp/include/simdcomp.h" // for bit packing
@@ -42,10 +42,10 @@ uint16_t get_zeroval(const uint16_t* inbuf, const size_t numints) {
     }
     free(histogram);
     dbg("Floor of %d is %zu/%zu total", common, common_count, numints);
-    if (10 * common_count > numints) {
+    // if (10 * common_count > numints) {
         return common;
-    }
-    return UINT16_MAX; // no floor with >10% of samples found
+    // }
+    // return UINT16_MAX; // no floor with >10% of samples found
 }
 
 double measure_err(const uint16_t* inbuf, const size_t numints, const uint16_t zeroval, const uint16_t zerothresh) {
@@ -60,13 +60,48 @@ double measure_err(const uint16_t* inbuf, const size_t numints, const uint16_t z
 
 // Simple delta encoding. See how lemire/simdcomp does this fast?
 // (Nevermind: the answer is SIMD, of course)
-void delta_encode(int32_t* xs, uint32_t xs_len) {
+void delta_encode(int32_t* xs, uint32_t len) {
     int32_t prev = 0;
-    for (int i = 0; i < xs_len; i++) {
+    for (uint32_t i = 0; i < len; i++) {
         int32_t tmpprev = xs[i];
         xs[i] -= prev;
         prev = tmpprev;
     }
+}
+
+uint32_t best_bits(int32_t* xs, uint32_t len) {
+    // Find the best number of bits to use for non-outliers
+    size_t* bitcounts = (size_t*)calloc(17, sizeof(size_t));
+
+    for (size_t i = 0; i < len; i++) {
+        dbg("xs[%zu]=%d", i, xs[i]);
+        // assert((size_t)std::log2(std::abs(xs[i])) + 1 + 1 <= 16);
+        if (xs[i] == 0) { // because log2(0) = -inf
+            bitcounts[1]++;
+        } else {
+            // Ceiling of log2(bound), plus one for the sign bit
+            bitcounts[(size_t)std::log2(std::abs(xs[i])) + 1 + 1]++;
+        }
+    }
+
+    size_t bestbits = 0;
+    size_t bestbittotal = SIZE_MAX;
+    dbg("bits per int/total bits");
+    for (size_t i = 1; i <= 16; i++) {
+        bitcounts[i] += bitcounts[i-1];
+        // 17 bytes for the outliers because 16 + 1 sign but
+        size_t totalbits = i * bitcounts[i] + 17 * (len - bitcounts[i]);
+        dbg("  %zu with %zu bits: %zu packed + %zu outliers", i, totalbits, i * bitcounts[i], 17 * (len - bitcounts[i]));
+        if (totalbits < bestbittotal) {
+            bestbittotal = totalbits;
+            bestbits = i;
+        }
+    }
+
+    free(bitcounts);
+
+    // Ceiling of log2(bound), plus one for the sign bit
+    return (uint32_t)bestbits;
 }
 
 struct header {
@@ -74,6 +109,7 @@ struct header {
     uint32_t numints;
     uint16_t zeroval;
     uint32_t outliersize;
+    uint32_t outlierlen;
     uint32_t siglen;
     uint8_t  bitsneeded;
 };
@@ -89,10 +125,24 @@ size_t writeheader(char* outbuf, size_t offset, struct header h) {
     writesmall(outbuf, offset, uint32_t, h.numints);
     writesmall(outbuf, offset, uint16_t, h.zeroval);
     writesmall(outbuf, offset, uint32_t, h.outliersize);
+    writesmall(outbuf, offset, uint32_t, h.outlierlen);
     writesmall(outbuf, offset, uint32_t, h.siglen);
     writesmall(outbuf, offset, uint8_t,  h.bitsneeded);
-    dbg("  Header: %zu", sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t));
+    dbg("  Header: %zu", sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t));
     return offset;
+}
+
+uint32_t bitpack(uint32_t* in, uint8_t** out, uint32_t len, uint32_t bits) {
+    uint32_t packed_bytes = simdpack_compressedbytes(len, bits);
+    uint8_t* packed = (uint8_t*)malloc(packed_bytes);
+    __m128i* endofbuf = simdpack_length(in, len, (__m128i*)packed, bits);
+    packed_bytes = (endofbuf - (__m128i*)packed)*sizeof(__m128i);
+    *out = packed;
+    return packed_bytes;
+}
+
+static inline uint32_t zigzag(int32_t x) {
+    return (x << 1) ^ (x >> 31);
 }
 
 int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
@@ -117,6 +167,7 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
     std::vector<uint32_t> lengths;
     bool newstart = true;
 
+    // Get the locations of the significant sections
     uint32_t sig_len = 0;
     uint32_t segment_len = 0;
     for (size_t i = 0; i < numints; i++) {
@@ -141,6 +192,7 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
     assert(indices.size() == lengths.size());
     dbg("%zu non-zero section(s) with sum length %d", indices.size(), sig_len);
 
+    // Pack the significant sections into `sigs`
     int32_t* sigs = (int32_t*)malloc(sig_len * sizeof(int32_t));
     size_t sig_needle = 0;
     for (size_t i = 0; i < indices.size(); i++) {
@@ -150,61 +202,42 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
         }
     }
 
+    // Delta-encode `sigs` in-place
     delta_encode(sigs, sig_len);
 
-    size_t* bitcounts = (size_t*)calloc(17, sizeof(size_t));
+    const uint32_t bits_needed = best_bits(sigs, sig_len);
 
-    for (size_t i = 0; i < sig_len; i++) {
-        // assert((size_t)std::log2(std::abs(sigs[i])) + 1 + 1 <= 16);
-        if (sigs[i] == 0) { // log2(0) = -inf
-            bitcounts[1]++;
-        } else {
-            // Ceiling of log2(bound), plus one for the sign bit
-            bitcounts[(size_t)std::log2(std::abs(sigs[i])) + 1 + 1]++;
-        }
-    }
-
-    size_t bestbits = 0;
-    size_t bestbittotal = SIZE_MAX;
-    dbg("bits per int/total bits");
-    for (size_t i = 1; i <= 16; i++) {
-        bitcounts[i] += bitcounts[i-1];
-        size_t totalbits = i * bitcounts[i] + 32 * (sig_len - bitcounts[i]);
-        dbg("  %zu/%zu", i, totalbits);
-        if (totalbits < bestbittotal) {
-            bestbittotal = totalbits;
-            bestbits = i;
-        }
-    }
-
-    // Ceiling of log2(bound), plus one for the sign bit
-    const uint32_t bits_needed = (uint32_t)bestbits;
+    // The biggest thing we can pack into `bits_needed` bits
     const uint16_t bound = 1 << (bits_needed - 1);
-    dbg("Bit-packing with %d bits", bits_needed);
 
-    // marker is 00..0011...11 with bits_needed 1s
+    dbg("Bit-packing with %d bits. All > %u are outliers", bits_needed, bound);
+
+    // The marker is 00..0011...11 with bits_needed 1s
+    // Would probably work with 11...11 too but I'm scared to try
     const uint32_t ones = ~0;
     const uint32_t outlier_marker = ones >> (32 - bits_needed);
 
     uint32_t* zigzagged = (uint32_t*)malloc(sig_len * sizeof(uint32_t));
-    // Don't reeeeally need 32 bits for these, just 16 + sign bit
-    std::vector<int32_t> outliers;
+    std::vector<uint32_t> outliers;
     for (int i = 0; i < sig_len; i++) {
         if (std::abs(sigs[i]) > bound) {
-            outliers.push_back(sigs[i]);
+            outliers.push_back(zigzag(sigs[i]));
             zigzagged[i] = outlier_marker;
         } else {
             // zig-zag encode
-            zigzagged[i] = (sigs[i] << 1) ^ (sigs[i] >> 31);
+            zigzagged[i] = zigzag(sigs[i]);
         }
     }
     free(sigs);
     dbg("%zu outliers encoded", outliers.size());
 
-    uint32_t packed_bytes = simdpack_compressedbytes(sig_len, bits_needed);
-    uint8_t* packed = (uint8_t*)malloc(packed_bytes);
-    __m128i* endofbuf = simdpack_length(zigzagged, sig_len, (__m128i*)packed, bits_needed);
-    packed_bytes = (endofbuf - (__m128i*)packed)*sizeof(__m128i);
+    // Pack outliers into 17 bits
+    uint8_t* packed_outliers;
+    uint32_t outlier_bytes = bitpack(outliers.data(), &packed_outliers, outliers.size(), 17);
+
+    // Pack zigzagged into bits_needed bits
+    uint8_t* packed_sigs;
+    uint32_t packed_bytes = bitpack(zigzagged, &packed_sigs, sig_len, bits_needed);
     free(zigzagged);
 
     size_t offset = 0;
@@ -213,7 +246,8 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
     h.indexsize = indices.size();
     h.numints = numints;
     h.zeroval = zeroval;
-    h.outliersize = outliers.size();
+    h.outliersize = outlier_bytes;
+    h.outlierlen = outliers.size();
     h.siglen = sig_len;
     h.bitsneeded = bits_needed;
 
@@ -221,16 +255,17 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
 
     offset = writeheader(outbuf, offset, h);
 
-    dbg("  Indices: %zu", indices.size()  * sizeof(uint32_t));
-    writebig(outbuf, offset, indices.size()  * sizeof(uint32_t), indices.data());
-    dbg("  Lengths: %zu", lengths.size()  * sizeof(uint32_t));
-    writebig(outbuf, offset, lengths.size()  * sizeof(uint32_t), lengths.data());
-    dbg("  Outliers: %zu", outliers.size()  * sizeof(uint32_t));
-    writebig(outbuf, offset, outliers.size() * sizeof(int32_t),  outliers.data());
-    dbg("  Packed data: %d", packed_bytes);
-    writebig(outbuf, offset, packed_bytes, packed);
+    dbg("  Indices: %zu", indices.size() * sizeof(uint32_t));
+    writebig(outbuf, offset, indices.size() * sizeof(uint32_t), indices.data());
+    dbg("  Lengths: %zu", lengths.size() * sizeof(uint32_t));
+    writebig(outbuf, offset, lengths.size() * sizeof(uint32_t), lengths.data());
+    dbg("  Outliers: %u", outlier_bytes);
+    writebig(outbuf, offset, outlier_bytes, packed_outliers);
+    dbg("  Packed data: %u", packed_bytes);
+    writebig(outbuf, offset, packed_bytes, packed_sigs);
+    dbg("  Total: %zu", offset);
 
-    free(packed);
+    free(packed_sigs);
 
     return offset;
 }
@@ -259,7 +294,8 @@ int main(const int argc, const char *argv[]) {
         std::vector<char> v = std::vector(std::istreambuf_iterator<char>(ifs), {});
         ifs.close();
         bytes = v.size();
-        inbuf = (uint16_t*)v.data();
+        inbuf = (uint16_t*)malloc(bytes);
+        memcpy(inbuf, v.data(), bytes);
     } else if (argv[1][0] == '-' && argv[1][1] == 'i' && argv[1][2] == '\0') {
         // text int mode
         if (argc != 4) {
@@ -274,7 +310,8 @@ int main(const int argc, const char *argv[]) {
         std::vector<uint16_t> v(std::istream_iterator<uint16_t>(ifs), {});
         ifs.close();
         bytes = v.size() * sizeof(uint16_t);
-        inbuf = v.data();
+        inbuf = (uint16_t*)malloc(bytes);
+        memcpy(inbuf, v.data(), bytes);
     } else {
         // text float mode
         if (argc != 3) {
@@ -290,10 +327,12 @@ int main(const int argc, const char *argv[]) {
         ifs.close();
         std::vector<uint16_t> v(doubles.begin(), doubles.end());
         bytes = v.size() * sizeof(uint16_t);
-        inbuf = v.data();
+        inbuf = (uint16_t*)malloc(bytes);
+        memcpy(inbuf, v.data(), bytes);
     }
 
-    char* outbuf = (char*)malloc(bytes * sizeof(char));
+    // 100 bytes for a little headroom. This guess could probably be improved.
+    char* outbuf = (char*)malloc(bytes * sizeof(char) + 100);
     std::ofstream ofs(outfile, std::ios::binary);
     if (!ofs) return 1; // fail
 
@@ -304,6 +343,7 @@ int main(const int argc, const char *argv[]) {
 
     ofs.write(outbuf, outlen);
     ofs.close();
+    free(inbuf);
     free(outbuf);
 
     printf("Compressed in %f s. \U000026A1\n", diff.count());

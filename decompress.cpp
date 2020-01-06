@@ -23,6 +23,7 @@ struct header {
     uint32_t numints;
     uint16_t zeroval;
     uint32_t outliersize;
+    uint32_t outlierlen;
     uint32_t siglen;
     uint8_t  bitsneeded;
 };
@@ -40,6 +41,7 @@ size_t readheader(char* inbuf, struct header* h) {
     readsmall(inbuf, offset, uint32_t, h, numints);
     readsmall(inbuf, offset, uint16_t, h, zeroval);
     readsmall(inbuf, offset, uint32_t, h, outliersize);
+    readsmall(inbuf, offset, uint32_t, h, outlierlen);
     readsmall(inbuf, offset, uint32_t, h, siglen);
     readsmall(inbuf, offset, uint8_t,  h, bitsneeded);
 
@@ -51,6 +53,10 @@ size_t get_numints(char* inbuf) {
     readheader(inbuf, &h);
 
     return h.numints;
+}
+
+static inline int32_t unzig(uint32_t x) {
+    return (x >> 1) ^ -(x & 1);
 }
 
 int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
@@ -68,8 +74,11 @@ int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
     uint32_t* lengths = reinterpret_cast<uint32_t*>(inbuf + offset);
     offset += h.indexsize * sizeof(uint32_t);
 
-    int32_t* outliers = reinterpret_cast<int32_t*>(inbuf + offset);
-    offset += h.outliersize * sizeof(int32_t);
+    uint8_t* packed_outliers = reinterpret_cast<uint8_t*>(inbuf + offset);
+    offset += h.outliersize * sizeof(uint8_t);
+
+    uint32_t* zigged_outliers = (uint32_t*)malloc(h.outlierlen * sizeof(uint32_t));
+    simdunpack_length((const __m128i*)packed_outliers, h.outlierlen, zigged_outliers, 17);
 
     uint8_t* packed = reinterpret_cast<uint8_t*>(inbuf + offset);
 
@@ -83,16 +92,17 @@ int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
     for (int i = 0; i < h.siglen; i++) {
         // Is there a faster bit-twiddling check?
         if (zigzagged[i] == outlier_marker) {
-            int32_t delta = outliers[outlier_needle];
+            int32_t delta = unzig(zigged_outliers[outlier_needle]);
             outlier_needle++;
             zigzagged[i] = prev + delta;
             prev = zigzagged[i];
         } else {
-            int32_t delta = (zigzagged[i] >> 1) ^ -(zigzagged[i] & 1);
+            int32_t delta = unzig(zigzagged[i]);
             zigzagged[i] = prev + delta;
             prev = zigzagged[i];
         }
     }
+    free(zigged_outliers);
 
     // Clear output
     for (uint32_t i = 0; i < h.numints; i++) {
