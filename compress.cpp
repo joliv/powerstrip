@@ -28,6 +28,8 @@
     offset += size;\
 } while(0)
 
+#define OUTLIER_BITS 17
+
 // One pass to find the noise floor, basically just the mode
 uint16_t get_zeroval(const uint16_t* inbuf, const size_t numints) {
     uint16_t common = 0;
@@ -74,7 +76,6 @@ uint32_t best_bits(int32_t* xs, uint32_t len) {
     size_t* bitcounts = (size_t*)calloc(17, sizeof(size_t));
 
     for (size_t i = 0; i < len; i++) {
-        dbg("xs[%zu]=%d", i, xs[i]);
         // assert((size_t)std::log2(std::abs(xs[i])) + 1 + 1 <= 16);
         if (xs[i] == 0) { // because log2(0) = -inf
             bitcounts[1]++;
@@ -90,8 +91,8 @@ uint32_t best_bits(int32_t* xs, uint32_t len) {
     for (size_t i = 1; i <= 16; i++) {
         bitcounts[i] += bitcounts[i-1];
         // 17 bytes for the outliers because 16 + 1 sign but
-        size_t totalbits = i * bitcounts[i] + 17 * (len - bitcounts[i]);
-        dbg("  %zu with %zu bits: %zu packed + %zu outliers", i, totalbits, i * bitcounts[i], 17 * (len - bitcounts[i]));
+        size_t totalbits = i * bitcounts[i] + OUTLIER_BITS * (len - bitcounts[i]);
+        dbg("  %zu with %zu bits: %zu packed + %zu outliers", i, totalbits, i * bitcounts[i], OUTLIER_BITS * (len - bitcounts[i]));
         if (totalbits < bestbittotal) {
             bestbittotal = totalbits;
             bestbits = i;
@@ -128,7 +129,10 @@ size_t writeheader(char* outbuf, size_t offset, struct header h) {
     writesmall(outbuf, offset, uint32_t, h.outlierlen);
     writesmall(outbuf, offset, uint32_t, h.siglen);
     writesmall(outbuf, offset, uint8_t,  h.bitsneeded);
-    dbg("  Header: %zu", sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t));
+    dbg("  Header: %zu",
+      sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t)
+      + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t)
+      + sizeof(uint8_t));
     return offset;
 }
 
@@ -233,7 +237,7 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
 
     // Pack outliers into 17 bits
     uint8_t* packed_outliers;
-    uint32_t outlier_bytes = bitpack(outliers.data(), &packed_outliers, outliers.size(), 17);
+    uint32_t outlier_bytes = bitpack(outliers.data(), &packed_outliers, outliers.size(), OUTLIER_BITS);
 
     // Pack zigzagged into bits_needed bits
     uint8_t* packed_sigs;
