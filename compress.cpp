@@ -11,6 +11,8 @@
 #include "emmintrin.h" // for __m128, intel intrinsic
 #include "vendor/simdcomp/include/simdcomp.h" // for bit packing
 
+#include "vendor/zstd/lib/common/huf.h" // Huffman coding
+
 #include "compress.hpp"
 
 #ifdef DEBUG
@@ -24,7 +26,7 @@
 #endif
 
 #define writebig(buf, offset, size, x) do {\
-    memcpy(outbuf + offset, x, size);\
+    memcpy(buf + offset, x, size);\
     offset += size;\
 } while(0)
 
@@ -45,9 +47,9 @@ uint16_t get_zeroval(const uint16_t* inbuf, const size_t numints) {
     free(histogram);
     dbg("Floor of %d is %zu/%zu total", common, common_count, numints);
     // if (10 * common_count > numints) {
-        return common;
+        // return common;
     // }
-    // return UINT16_MAX; // no floor with >10% of samples found
+    return UINT16_MAX; // no floor with >10% of samples found
 }
 
 double measure_err(const uint16_t* inbuf, const size_t numints, const uint16_t zeroval, const uint16_t zerothresh) {
@@ -77,7 +79,7 @@ uint32_t best_bits(int32_t* xs, uint32_t len) {
 
     for (size_t i = 0; i < len; i++) {
         // assert((size_t)std::log2(std::abs(xs[i])) + 1 + 1 <= 16);
-        if (xs[i] == 0) { // because log2(0) = -inf
+        if (xs[i] == 0) { // protect against log2(0) = -inf
             bitcounts[1]++;
         } else {
             // Ceiling of log2(bound), plus one for the sign bit
@@ -211,25 +213,24 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
 
     const uint32_t bits_needed = best_bits(sigs, sig_len);
 
-    // The biggest thing we can pack into `bits_needed` bits
-    const uint16_t bound = 1 << (bits_needed - 1);
-
-    dbg("Bit-packing with %d bits. All > %u are outliers", bits_needed, bound);
-
+    const uint32_t ones = ~0;
     // The marker is 00..0011...11 with bits_needed 1s
     // Would probably work with 11...11 too but I'm scared to try
-    const uint32_t ones = ~0;
     const uint32_t outlier_marker = ones >> (32 - bits_needed);
+    // Everything below that top spot is fair game
+    const uint32_t bound = outlier_marker - 1;
+    dbg("Bit-packing with %d bits. All > %u are outliers", bits_needed, bound);
 
     uint32_t* zigzagged = (uint32_t*)malloc(sig_len * sizeof(uint32_t));
     std::vector<uint32_t> outliers;
     for (int i = 0; i < sig_len; i++) {
-        if (std::abs(sigs[i]) > bound) {
-            outliers.push_back(zigzag(sigs[i]));
+        uint32_t zigged = zigzag(sigs[i]);
+        if (zigged > bound) {
+            outliers.push_back(zigged);
             zigzagged[i] = outlier_marker;
         } else {
             // zig-zag encode
-            zigzagged[i] = zigzag(sigs[i]);
+            zigzagged[i] = zigged;
         }
     }
     free(sigs);
@@ -255,23 +256,52 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
     h.siglen = sig_len;
     h.bitsneeded = bits_needed;
 
+    size_t output_size = sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t)
+      + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t)
+      + sizeof(uint8_t)
+      + indices.size() * sizeof(uint32_t)
+      + lengths.size() * sizeof(uint32_t)
+      + outlier_bytes
+      + packed_bytes;
+
+    char* before_compression = (char*)malloc(output_size);
+
     dbg("Output sizes, in bytes");
 
-    offset = writeheader(outbuf, offset, h);
+    offset = writeheader(before_compression, offset, h);
 
     dbg("  Indices: %zu", indices.size() * sizeof(uint32_t));
-    writebig(outbuf, offset, indices.size() * sizeof(uint32_t), indices.data());
+    writebig(before_compression, offset, indices.size() * sizeof(uint32_t), indices.data());
     dbg("  Lengths: %zu", lengths.size() * sizeof(uint32_t));
-    writebig(outbuf, offset, lengths.size() * sizeof(uint32_t), lengths.data());
+    writebig(before_compression, offset, lengths.size() * sizeof(uint32_t), lengths.data());
     dbg("  Outliers: %u", outlier_bytes);
-    writebig(outbuf, offset, outlier_bytes, packed_outliers);
+    writebig(before_compression, offset, outlier_bytes, packed_outliers);
     dbg("  Packed data: %u", packed_bytes);
-    writebig(outbuf, offset, packed_bytes, packed_sigs);
-    dbg("  Total: %zu", offset);
+    writebig(before_compression, offset, packed_bytes, packed_sigs);
+    dbg("  Total before Huffman: %zu", offset);
 
     free(packed_sigs);
 
-    return offset;
+    assert(offset == output_size);
+
+    size_t x = HUF_compress(outbuf + sizeof(uint32_t), insize, before_compression, output_size);
+    if (HUF_isError(x)) {
+        x = 0; // let's just not compress
+        printf("OH NO, ERRROROROROROROR\n");
+    } else {
+        printf("no error.\n");
+    }
+    dbg("  Total after Huffman: %zu", x);
+    size_t zero = 0;
+    if (x == 0) {
+        // the data is uncompressible
+        memcpy(outbuf + sizeof(uint32_t), before_compression, output_size);
+        writesmall(outbuf, zero, uint32_t, 0);
+    } else {
+        writesmall(outbuf, zero, uint32_t, output_size);
+    }
+
+    return x;
 }
 
 void print_usage() {

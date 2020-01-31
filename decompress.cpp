@@ -4,9 +4,13 @@
 #include <vector>
 
 #include "emmintrin.h" // for __m128, intel intrinsic
-#include "simdcomp.h" // for bit packing
+#include "vendor/simdcomp/include/simdcomp.h" // for bit packing
+
+#include "vendor/zstd/lib/common/huf.h" // Huffman coding
 
 #include "decompress.hpp"
+
+#define CLI true
 
 #ifdef DEBUG
 #define dbg(...) do {\
@@ -45,6 +49,14 @@ size_t readheader(char* inbuf, struct header* h) {
     readsmall(inbuf, offset, uint32_t, h, siglen);
     readsmall(inbuf, offset, uint8_t,  h, bitsneeded);
 
+    dbg("  indexsize=%u", h->indexsize);
+    dbg("  numints=%u", h->numints);
+    dbg("  zeroval=%u", h->zeroval);
+    dbg("  outliersize=%u", h->outliersize);
+    dbg("  outlierlen=%u", h->outlierlen);
+    dbg("  siglen=%u", h->siglen);
+    dbg("  bitsneeded=%u", h->bitsneeded);
+
     return offset;
 }
 
@@ -59,28 +71,43 @@ static inline int32_t unzig(uint32_t x) {
     return (x >> 1) ^ -(x & 1);
 }
 
-int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
+// int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
+int64_t deltadecode(char* inbuf, size_t insize, uint16_t** out) {
+    uint32_t* a = reinterpret_cast<uint32_t*>(inbuf);
+    size_t original_size = (size_t)a[0];
+    char* post_buf;
+    if (original_size == 0) {
+        // Not Huffman compressed, actually
+        post_buf = inbuf + sizeof(uint32_t);
+        dbg("Not Huffman-coded, not de-compressing.");
+    } else {
+        post_buf = (char*)malloc(original_size);
+        dbg("Decompressing %zu bytes of Huffman-coded data into %zu", insize - sizeof(uint32_t), original_size);
+        HUF_decompress(post_buf, original_size, inbuf + sizeof(uint32_t), insize - sizeof(uint32_t));
+    }
+
     // What follows could probably be a macro.
     size_t offset = 0;
 
     struct header h;
 
-    offset += readheader(inbuf, &h);
-    dbg("%d segments, %d outliers", h.indexsize, h.outliersize);
+    offset += readheader(post_buf, &h);
+    dbg("%d segments, %d outliers", h.indexsize, h.outlierlen);
+    dbg("%d indices", h.indexsize);
 
-    uint32_t* indices = reinterpret_cast<uint32_t*>(inbuf + offset);
+    uint32_t* indices = reinterpret_cast<uint32_t*>(post_buf + offset);
     offset += h.indexsize * sizeof(uint32_t);
 
-    uint32_t* lengths = reinterpret_cast<uint32_t*>(inbuf + offset);
+    uint32_t* lengths = reinterpret_cast<uint32_t*>(post_buf + offset);
     offset += h.indexsize * sizeof(uint32_t);
 
-    uint8_t* packed_outliers = reinterpret_cast<uint8_t*>(inbuf + offset);
+    uint8_t* packed_outliers = reinterpret_cast<uint8_t*>(post_buf + offset);
     offset += h.outliersize * sizeof(uint8_t);
 
     uint32_t* zigged_outliers = (uint32_t*)malloc(h.outlierlen * sizeof(uint32_t));
     simdunpack_length((const __m128i*)packed_outliers, h.outlierlen, zigged_outliers, 17);
 
-    uint8_t* packed = reinterpret_cast<uint8_t*>(inbuf + offset);
+    uint8_t* packed = reinterpret_cast<uint8_t*>(post_buf + offset);
 
     uint32_t* zigzagged = (uint32_t*)malloc(h.siglen * sizeof(uint32_t));
     simdunpack_length((const __m128i*)packed, h.siglen, zigzagged, h.bitsneeded);
@@ -104,7 +131,10 @@ int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
     }
     free(zigged_outliers);
 
-    // Clear output
+    // only for the CLI
+    uint16_t* outbuf = (uint16_t*)malloc(h.numints * sizeof(uint16_t));
+
+    // Clear output, should be vectorized
     for (uint32_t i = 0; i < h.numints; i++) {
         outbuf[i] = h.zeroval;
     }
@@ -118,6 +148,7 @@ int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
     }
     free(zigzagged);
 
+    *out = outbuf;
     return h.numints * sizeof(uint16_t);
 }
 
@@ -150,16 +181,17 @@ int main(const int argc, const char *argv[]) {
     std::vector<char> inbuf(std::istreambuf_iterator<char>(ifs), {});
     ifs.close();
 
-    const size_t numints = get_numints(inbuf.data());
-    uint16_t* outbuf = (uint16_t*)malloc(sizeof(uint16_t) * numints);
-    dbg("Decompressing %zu ints", numints);
+    uint16_t* outbuf;
+    // dbg("Decompressing %zu ints", numints);
     std::ofstream ofs(mode == mode_default ? argv[2] : argv[3], std::ios::binary);
     if (!ifs || !ofs) return 1; // fail
 
     auto start = std::chrono::steady_clock::now();
-    int64_t outlen = deltadecode(inbuf.data(), inbuf.size(), (uint16_t*)outbuf);
+    int64_t outlen = deltadecode(inbuf.data(), inbuf.size(), &outbuf);
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<double> diff = end - start;
+
+    dbg("Decompressed into %lld bytes", outlen);
 
     if (mode == mode_binary) {
         // binary mode
