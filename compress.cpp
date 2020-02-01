@@ -32,23 +32,37 @@
 
 #define OUTLIER_BITS 17
 
+// 128 KB = HUF_BLOCKSIZE_MAX
+// TODO: allow larger sizes but if it's too much we just fall back
+#define BLOCK_SIZE (128 * 1024 * 4)
+
+#define MAX_FLOOR 1000
+
+// for i in {1..10};do cat "/Volumes/Fall in SF/thesis/dataport-1s/1222/1222_car1.bin" >> "/Volumes/Fall in SF/thesis/lotsofdata.bin"; done
+
 // One pass to find the noise floor, basically just the mode
 uint16_t get_zeroval(const uint16_t* inbuf, const size_t numints) {
     uint16_t common = 0;
     size_t common_count = 0;
-    size_t* histogram = (size_t*)calloc(UINT16_MAX+1, sizeof(size_t));
+    size_t* histogram = (size_t*)calloc(MAX_FLOOR, sizeof(size_t));
     for (size_t i = 0; i < numints; i++) {
-        histogram[inbuf[i]]++;
-        if (histogram[inbuf[i]] > common_count) {
-            common = inbuf[i];
-            common_count = histogram[inbuf[i]];
+        if (inbuf[i] < MAX_FLOOR) {
+            histogram[inbuf[i]]++;
         }
     }
+
+    for (size_t i = 0; i < MAX_FLOOR; i++) {
+        if (histogram[i] > common_count) {
+            common = i;
+            common_count = histogram[i];
+        }
+    }
+
     free(histogram);
     dbg("Floor of %d is %zu/%zu total", common, common_count, numints);
-    // if (10 * common_count > numints) {
-        // return common;
-    // }
+    if (10 * common_count > numints) {
+        return common;
+    }
     return UINT16_MAX; // no floor with >10% of samples found
 }
 
@@ -288,97 +302,65 @@ int64_t deltacode(uint16_t* inbuf, size_t insize, char* outbuf) {
     if (HUF_isError(x)) {
         x = 0; // let's just not compress
         printf("OH NO, ERRROROROROROROR\n");
-    } else {
-        printf("no error.\n");
     }
+
     dbg("  Total after Huffman: %zu", x);
     size_t zero = 0;
     if (x == 0) {
         // the data is uncompressible
-        memcpy(outbuf + sizeof(uint32_t), before_compression, output_size);
         writesmall(outbuf, zero, uint32_t, 0);
+        memcpy(outbuf + sizeof(uint32_t), before_compression, output_size);
+        return sizeof(uint32_t) + output_size;
     } else {
         writesmall(outbuf, zero, uint32_t, output_size);
+        return sizeof(uint32_t) + x;
     }
-
-    return x;
 }
 
 void print_usage() {
-    printf("Usage: compress [-b/i] in compressed\n");
-    printf("  Compresses `in', a newline-separated list of numbers, into `compressed'\n");
-    printf("  -b\tTakes in as a binary file of 16-bit integers\n");
-    printf("  -i\tTakes in as a newline-separated list of text integers\n");
+    printf("Usage: compress in.bin compressed.bin\n");
+    printf("  Compresses `in.bin' into `compressed.bin'\n");
 }
 
 int main(const int argc, const char *argv[]) {
-    size_t bytes;
-    uint16_t* inbuf;
-    std::string outfile;
-    if (argv[1][0] == '-' && argv[1][1] == 'b' && argv[1][2] == '\0') {
-        // binary mode
-        if (argc != 4) {
-            print_usage();
-            return 1;
-        }
-        printf("Working in binary mode.\n");
-        outfile = argv[3];
-        printf("Compressing %s into %s.\n", argv[2], outfile.c_str());
-        std::ifstream ifs(argv[2], std::ios::binary);
-        std::vector<char> v = std::vector(std::istreambuf_iterator<char>(ifs), {});
-        ifs.close();
-        bytes = v.size();
-        inbuf = (uint16_t*)malloc(bytes);
-        memcpy(inbuf, v.data(), bytes);
-    } else if (argv[1][0] == '-' && argv[1][1] == 'i' && argv[1][2] == '\0') {
-        // text int mode
-        if (argc != 4) {
-            print_usage();
-            return 1;
-        }
-
-        printf("Working in text, integer mode.\n");
-        outfile = argv[3];
-        printf("Compressing %s into %s.\n", argv[2], outfile.c_str());
-        std::ifstream ifs(argv[2]);
-        std::vector<uint16_t> v(std::istream_iterator<uint16_t>(ifs), {});
-        ifs.close();
-        bytes = v.size() * sizeof(uint16_t);
-        inbuf = (uint16_t*)malloc(bytes);
-        memcpy(inbuf, v.data(), bytes);
-    } else {
-        // text float mode
-        if (argc != 3) {
-            print_usage();
-            return 1;
-        }
-
-        printf("Working in text, float mode.\n");
-        outfile = argv[2];
-        printf("Compressing %s into %s.\n", argv[1], outfile.c_str());
-        std::ifstream ifs(argv[1]);
-        std::vector<double> doubles(std::istream_iterator<double>(ifs), {});
-        ifs.close();
-        std::vector<uint16_t> v(doubles.begin(), doubles.end());
-        bytes = v.size() * sizeof(uint16_t);
-        inbuf = (uint16_t*)malloc(bytes);
-        memcpy(inbuf, v.data(), bytes);
+    if (argc != 3) {
+        print_usage();
+        return 1;
     }
 
-    // 100 bytes for a little headroom. This guess could probably be improved.
-    char* outbuf = (char*)malloc(bytes * sizeof(char) + 100);
-    std::ofstream ofs(outfile, std::ios::binary);
-    if (!ofs) return 1; // fail
+    // Binary mode: now the only mode!
+    printf("Compressing %s into %s.\n", argv[1], argv[2]);
+    std::ifstream ifs(argv[1], std::ios::binary);
+    if (!ifs) { printf("Failed to open %s\n", argv[1]); printf("hmmm %s\n", strerror(errno)); return 1; }
+    std::ofstream ofs(argv[2], std::ios::binary | std::ios::trunc);
+    if (!ofs) { printf("Failed to open %s\n", argv[2]); return 1; }
 
     auto start = std::chrono::steady_clock::now();
-    int64_t outlen = deltacode(inbuf, bytes, outbuf);
+
+    char* inbuf  = (char*)malloc(BLOCK_SIZE * sizeof(char));
+    char* outbuf = (char*)malloc(BLOCK_SIZE * sizeof(char));
+
+    int num_block = 0;
+    while (!ifs.eof()) {
+        dbg("=== === === ===\nWorking on block %d", ++num_block);
+
+        ifs.read(inbuf, BLOCK_SIZE);
+        std::streamsize len = ifs.gcount();
+
+        // Might want to handle partial ints here. Dunno.
+        int64_t outlen = deltacode((uint16_t*)inbuf, len, outbuf);
+
+        ofs.write((char*)&outlen, sizeof(outlen));
+        ofs.write(outbuf, outlen);
+    }
+
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<double> diff = end - start;
 
-    ofs.write(outbuf, outlen);
-    ofs.close();
     free(inbuf);
     free(outbuf);
+
+    ofs.close();
 
     printf("Compressed in %f s. \U000026A1\n", diff.count());
     return 0;

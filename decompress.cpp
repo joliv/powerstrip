@@ -12,6 +12,10 @@
 
 #define CLI true
 
+// 128 KB = HUF_BLOCKSIZE_MAX
+// TODO: allow larger sizes but if it's too much we just fall back
+#define BLOCK_SIZE (128 * 1024 * 4)
+
 #ifdef DEBUG
 #define dbg(...) do {\
     printf("  ");\
@@ -72,7 +76,7 @@ static inline int32_t unzig(uint32_t x) {
 }
 
 // int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
-int64_t deltadecode(char* inbuf, size_t insize, uint16_t** out) {
+int64_t deltadecode(char* inbuf, size_t insize, uint16_t* outbuf) {
     uint32_t* a = reinterpret_cast<uint32_t*>(inbuf);
     size_t original_size = (size_t)a[0];
     char* post_buf;
@@ -131,9 +135,6 @@ int64_t deltadecode(char* inbuf, size_t insize, uint16_t** out) {
     }
     free(zigged_outliers);
 
-    // only for the CLI
-    uint16_t* outbuf = (uint16_t*)malloc(h.numints * sizeof(uint16_t));
-
     // Clear output, should be vectorized
     for (uint32_t i = 0; i < h.numints; i++) {
         outbuf[i] = h.zeroval;
@@ -148,7 +149,6 @@ int64_t deltadecode(char* inbuf, size_t insize, uint16_t** out) {
     }
     free(zigzagged);
 
-    *out = outbuf;
     return h.numints * sizeof(uint16_t);
 }
 
@@ -162,47 +162,40 @@ void print_usage() {
 enum Mode { mode_binary, mode_ints, mode_floats, mode_default };
 
 int main(const int argc, const char *argv[]) {
-    Mode mode;
-    if (argv[1][0] != '-') {
-        mode = mode_default;
-        printf("Working in text mode.");
-    } else if (argv[1][1] == 'b' && argv[1][2] == '\0') {
-        mode = mode_binary;
-        printf("Working in binary mode.");
-    } else if (argv[1][1] == 'i' && argv[1][2] == '\0') {
-        mode = mode_ints;
-        printf("Working in text mode.");
-    } else {
-        printf("Unknown flag.\n");
-        print_usage();
-        exit(1);
-    }
-    std::ifstream ifs(mode == mode_default ? argv[1] : argv[2], std::ios::binary);
-    std::vector<char> inbuf(std::istreambuf_iterator<char>(ifs), {});
-    ifs.close();
+    std::ifstream ifs(argv[1], std::ios::binary);
 
-    uint16_t* outbuf;
     // dbg("Decompressing %zu ints", numints);
-    std::ofstream ofs(mode == mode_default ? argv[2] : argv[3], std::ios::binary);
+    std::ofstream ofs(argv[2], std::ios::binary | std::ios::trunc);
     if (!ifs || !ofs) return 1; // fail
 
     auto start = std::chrono::steady_clock::now();
-    int64_t outlen = deltadecode(inbuf.data(), inbuf.size(), &outbuf);
+
+    // 100 bytes for some headroom but I'm not sure we need it?
+    char* inbuf  = (char*)malloc(BLOCK_SIZE * sizeof(char) + sizeof(uint32_t));
+    uint16_t* outbuf = (uint16_t*)malloc(BLOCK_SIZE * sizeof(char) + sizeof(uint32_t));
+
+    int num_block = 0;
+    while (!ifs.eof()) {
+        dbg("=== === === ===\nWorking on block %d", ++num_block);
+
+        uint64_t len;
+        ifs.read((char*)&len, sizeof(len));
+        if (ifs.gcount() == 0) break; // there wasn't actually a new block
+        dbg("Next block is %llu bytes", len);
+        ifs.read(inbuf, len);
+
+        int64_t outlen = deltadecode(inbuf, len, outbuf);
+        dbg("Decompressed into %lld bytes", outlen);
+
+        ofs.write((char*)outbuf, outlen);
+    }
+
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<double> diff = end - start;
 
-    dbg("Decompressed into %lld bytes", outlen);
-
-    if (mode == mode_binary) {
-        // binary mode
-        ofs.write((char*)outbuf, outlen);
-    } else {
-        // text int mode
-        for (int i = 0; i < outlen/sizeof(uint16_t); i++) {
-            ofs << outbuf[i] << '\n';
-        }
-    }
+    free(inbuf);
     free(outbuf);
+    ifs.close();
     ofs.close();
 
     printf("Decompressed in %f s. \U000026A1\n", diff.count());
