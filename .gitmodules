@@ -1,0 +1,6 @@
+[submodule "vendor/zstd"]
+	path = extern/zstd
+	url = https://github.com/facebook/zstd
+[submodule "vendor/simdcomp"]
+	path = extern/simdcomp
+	url = https://github.com/lemire/simdcomp
