@@ -16,6 +16,6 @@ _deps
 compress
 decompress
 
-# While we can't rid this
-libsimdcomp.a
+bin
+lib
 

@@ -4,3 +4,9 @@
 [submodule "vendor/simdcomp"]
 	path = extern/simdcomp
 	url = https://github.com/lemire/simdcomp
+[submodule "rapidcheck"]
+	path = rapidcheck
+	url = https://github.com/emil-e/rapidcheck
+[submodule "extern/rapidcheck"]
+	path = extern/rapidcheck
+	url = https://github.com/emil-e/rapidcheck
