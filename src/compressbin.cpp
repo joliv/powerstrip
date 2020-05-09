@@ -1,5 +1,6 @@
 #include <iostream> // for cin, cout
 #include <cstring> // for memcpy
+#include <fstream> // for if,ofstream
 
 #include "../extern/zstd/lib/common/huf.h" // Huffman coding
 #include "../extern/simdcomp/include/simdcomp.h" // for bit-packing
@@ -7,13 +8,26 @@
 #include "common.h"
 #include "powerstrip.h"
 
-int main() {
-  char* in_buf = new char[BLOCK_SIZE];
-  char* out_buf = new char[BLOCK_SIZE];
+int main(int argc, char** argv) {
+  // TODO replace with help text
+  if (argc != 3) {
+    std::cerr << "ERR insufficient args" << std::endl;
+    return -1;
+  }
 
-  while (!std::cin.eof()) {
-    std::cin.read(in_buf, BLOCK_SIZE);
-    std::streamsize in_bytes = std::cin.gcount();
+  // ifstream is pretty fast!
+  // https://lemire.me/blog/2012/06/26/which-is-fastest-read-fread-ifstream-or-mmap/
+  std::ifstream i_f(argv[1], std::ios::binary);
+  std::ofstream o_f(argv[2], std::ios::binary);
+
+  std::cerr << "Compressing from " << argv[1] << " into " << argv[2] << std::endl;
+
+  char* i_buf = new char[BLOCK_SIZE];
+  char* o_buf = new char[BLOCK_SIZE];
+
+  while (!i_f.eof()) {
+    i_f.read(i_buf, BLOCK_SIZE);
+    std::streamsize in_bytes = i_f.gcount();
 
     if (in_bytes % 2 != 0) {
       std::cerr << "ERR stream ends with half of a uint16" << std::endl;
@@ -22,18 +36,19 @@ int main() {
 
     const size_t len = in_bytes / sizeof(uint16_t);
 
-    const int64_t out_bytes = compress_block((uint16_t*) in_buf, len, out_buf);
+    const int64_t out_bytes = compress_block((uint16_t*) i_buf, len, o_buf);
 
-    std::cout.write(reinterpret_cast<const char*>(&out_bytes), sizeof(out_bytes));
-    std::cout.write(out_buf, out_bytes);
+    o_f.write(reinterpret_cast<const char*>(&out_bytes), sizeof(out_bytes));
+    o_f.write(o_buf, out_bytes);
   }
 
-  delete[] in_buf;
-  delete[] out_buf;
+  delete[] i_buf;
+  delete[] o_buf;
 
   std::cerr << "Hello, World!" << std::endl;
-  std::cerr << HUF_isError(5) << std::endl;
-  std::cerr << simdpack_compressedbytes(5, 5) << std::endl;
+//  These should work
+//  std::cerr << HUF_isError(5) << std::endl;
+//  std::cerr << simdpack_compressedbytes(5, 5) << std::endl;
 
   return 0;
 }

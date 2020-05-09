@@ -69,6 +69,6 @@ class Stripped {
 
 // Compress a block of len uint16s into out
 uint64_t compress_block(const uint16_t* block, size_t len, char* out);
-uint64_t decompress_block(const char* block, const size_t len, uint16_t* out);
+uint64_t decompress_block(const char* block, size_t len, uint16_t* out);
 
 #endif //POWERSTRIP_INCLUDE_COMPRESS_H_

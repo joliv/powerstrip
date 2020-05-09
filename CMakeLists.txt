@@ -6,6 +6,8 @@ project(powerstrip
 
 set(CMAKE_CXX_STANDARD 17)
 
+set(CMAKE_VERBOSE_MAKEFILE on)
+
 # create lib, bin dirs
 #add_custom_command(OUTPUT lib
 #        PRE_BUILD
@@ -32,7 +34,7 @@ add_library(simdcomp STATIC ${SIMDCOMP_SOURCES})
 
 include_directories(include)
 
-add_executable(compress src/powerstrip.cpp src/compressbin.cpp )
+add_executable(compress src/powerstrip.cpp src/compressbin.cpp)
 target_link_libraries(compress libzstd_static)
 target_link_libraries(compress simdcomp)
 
@@ -51,9 +53,8 @@ target_link_libraries(test powerstrip)
 
 # compile-time options, if needed
 #set(DEBUG_OPTIONS, "-Wall")
-#set(RELEASE_OPTIONS, "-Wall")
+#set(RELEASE_OPTIONS, "-Wall -O3")
 #target_compile_options(compress PRIVATE "$<$<CONFIG:DEBUG>:${DEBUG_OPTIONS}>")
 #target_compile_options(compress PRIVATE "$<$<CONFIG:RELEASE>:${RELEASE_OPTIONS}>")
 #target_compile_options(decompress PRIVATE "$<$<CONFIG:DEBUG>:${DEBUG_OPTIONS}>")
 #target_compile_options(decompress PRIVATE "$<$<CONFIG:RELEASE>:${RELEASE_OPTIONS}>")
-

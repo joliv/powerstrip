@@ -1,5 +1,4 @@
 #include <cstring> // for memcpy
-#include <utility>
 #include <vector>
 #include <cinttypes> // for printf macros
 #include <powerstrip.h>
@@ -75,9 +74,9 @@ Stripped Stripped::Strip(const uint16_t* xs, const size_t len) {
 
   if (len >= 1) dbg("strip: xs[0]=%" PRIu16 " len=%zu", xs[0], len);
 
-  auto* indices = static_cast<uint32_t*>(std::malloc(len * sizeof(uint32_t)));
-  auto* lengths = static_cast<uint32_t*>(std::malloc(len * sizeof(uint32_t)));
-  auto* actives = static_cast<uint16_t*>(std::malloc(len * sizeof(uint16_t)));
+  auto* indices = new uint32_t[len];
+  auto* lengths = new uint32_t[len];
+  auto* actives = new uint16_t[len];
 
   for (size_t i = 0; i < len; i++) {
     // TODO consider inverting the nesting so it's more like an FSM
@@ -181,7 +180,7 @@ uint32_t Packed::ZigZag(const int32_t x) {
 }
 
 int32_t* Packed::DeltaEncode(const uint16_t* xs, const uint32_t len) {
-  auto* diffed = static_cast<int32_t*>(std::malloc(len * sizeof(uint32_t)));
+  auto* diffed = new int32_t[len];
   std::adjacent_difference(xs, xs + len, diffed);
   return diffed;
 }
@@ -242,7 +241,6 @@ Packed Packed::Pack(const uint16_t* xs, const uint32_t len) {
   std::vector<uint32_t> outlier_list; // TODO initial size, too?
   for (uint32_t i = 0; i < len; i++) {
     uint32_t zigged = ZigZag(d_encoded[i]);
-    dbg("pack:  zigged=%" PRIu32, zigged);
     if (zigged > bound) {
       outlier_list.push_back(zigged);
       zigzagged.push_back(outlier_marker);
@@ -271,7 +269,7 @@ uint16_t* Packed::Unpack(uint32_t* len) {
   uint32_t* u_outliers = outliers.Unpack();
   uint32_t* zigzagged = signal.Unpack();
   *len = signal.GetLen();
-  auto* xs = static_cast<uint16_t*>(std::malloc(signal.GetLen() * sizeof(uint16_t))); // TODO don't love this
+  auto* xs = new uint16_t[signal.GetLen()]; // TODO don't love this
 
   uint32_t outlier_needle = 0;
   const uint32_t outlier_marker = 0xffffffff >> (32u - signal.GetBits());
@@ -340,7 +338,7 @@ Bitpacked Bitpacked::Read(const char* from, uint64_t &offset) {
 }
 
 uint32_t* Bitpacked::Unpack() {
-  auto* unpacked = static_cast<uint32_t*>(malloc(len * sizeof(uint32_t)));
+  auto* unpacked = new uint32_t[len];
   simdunpack_length(reinterpret_cast<const __m128i*>(packed), len, unpacked, bits);
   return unpacked;
 }
