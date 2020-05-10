@@ -10,25 +10,44 @@
 #include "../extern/zstd/lib/common/huf.h" // Huffman coding
 #include "../extern/simdcomp/include/simdcomp.h" // for bit-packing
 
-#define WINDOW 0
+#define WINDOW 3
 
 #define OUTLIER_BITS 17
 
-// A floor above this wattage won't be found
-//#define MAX_FLOOR 1000
+// A floor at this wattage and above won't be found
+#define MAX_FLOOR 1000
 
 bool is_active(const uint16_t x, const uint16_t floor) {
-  return x > floor + WINDOW || x < floor - WINDOW;
+  return floor == UINT16_MAX || (x > floor + WINDOW || x < floor - WINDOW);
 }
 
-//uint16_t find_floor(const uint16_t* xs, const uint32_t len) {
-//  auto* histogram = static_cast<uint32_t *>(std::calloc(MAX_FLOOR, sizeof(uint32_t)));
-//  for (uint32_t i = 0; i < len; i++) {
-//    if (xs[i] < MAX_FLOOR) { // TODO collapse into one line?
-//      histogram[inbuf[i]]++;
-//    }
-//  }
-//}
+uint16_t find_floor(const uint16_t* xs, const uint32_t len) {
+  auto* histogram = static_cast<uint32_t *>(std::calloc(MAX_FLOOR, sizeof(uint32_t)));
+  for (uint32_t i = 0; i < len; i++) {
+    if (xs[i] < MAX_FLOOR) { // TODO collapse into one line so no branching?
+      histogram[xs[i]]++;
+    }
+  }
+
+  uint16_t floor = 0;
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < MAX_FLOOR; i++) {
+    if (histogram[i] > count) {
+      floor = i;
+      count = histogram[i];
+    }
+  }
+
+  delete[] histogram;
+
+  dbg("floor: floor=%" PRIu16 " count=%" PRIu32, floor, count);
+
+  if (10 * count > len) {
+    return floor;
+  } else {
+    return UINT16_MAX; // no floor with >10% of samples found
+  }
+}
 
 struct stripped strip(const uint16_t* xs, const uint32_t len, uint32_t* actives) {
   struct stripped s{
@@ -37,7 +56,7 @@ struct stripped strip(const uint16_t* xs, const uint32_t len, uint32_t* actives)
       .total_l = len,
   };
 
-  uint16_t floor = 0; // TODO do this
+  uint16_t floor = find_floor(xs, len); // TODO do this
 
   bool was_active = false;
   uint32_t segments = 0;
@@ -347,6 +366,7 @@ uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
   size_t huf_size = HUF_compress(out + sizeof(uint32_t), BLOCK_SIZE, uncompressed, uncompressed_size);
   if (huf_size == 0 || HUF_isError(huf_size)) {
     dbg("HUF error: %s", HUF_isError(huf_size) ? HUF_getErrorName(huf_size) : "uncompressible");
+    dbg("srcSize=%zu", (size_t) uncompressed_size);
     dbg("compb: tag=0xffffffff uncompressed_size=%" PRIu64, uncompressed_size);
     uint64_t out_size = write_tagged(0xffffffff, uncompressed, uncompressed_size, out);
     delete[] uncompressed;

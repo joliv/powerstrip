@@ -6,7 +6,7 @@
 #define BLOCK_SIZE (128 * 1024 * 4)
 
 // TODO why do we still have a "common" header?
-#ifdef NDEBUG // cross-plat!
+#ifndef NDEBUG // cross-plat!
 #define dbg(...) do {\
     printf("  ");\
     printf(__VA_ARGS__);\
