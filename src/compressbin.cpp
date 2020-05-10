@@ -23,7 +23,7 @@ int main(const int argc, const char** argv) {
   std::cerr << "Compressing from " << argv[1] << " into " << argv[2] << std::endl;
 
   char* i_buf = new char[BLOCK_SIZE];
-  char* o_buf = new char[BLOCK_SIZE];
+  char* o_buf = new char[BLOCK_SIZE + sizeof(uint32_t)]; // One number of headroom for Huffman length
 
   while (!i_f.eof()) {
     i_f.read(i_buf, BLOCK_SIZE);
@@ -46,9 +46,6 @@ int main(const int argc, const char** argv) {
   delete[] o_buf;
 
   std::cerr << "Hello, World!" << std::endl;
-//  These should work
-//  std::cerr << HUF_isError(5) << std::endl;
-//  std::cerr << simdpack_compressedbytes(5, 5) << std::endl;
 
   return 0;
 }

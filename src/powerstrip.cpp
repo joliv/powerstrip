@@ -14,9 +14,21 @@
 
 #define OUTLIER_BITS 17
 
+// A floor above this wattage won't be found
+//#define MAX_FLOOR 1000
+
 bool is_active(const uint16_t x, const uint16_t floor) {
   return x > floor + WINDOW || x < floor - WINDOW;
 }
+
+//uint16_t find_floor(const uint16_t* xs, const uint32_t len) {
+//  auto* histogram = static_cast<uint32_t *>(std::calloc(MAX_FLOOR, sizeof(uint32_t)));
+//  for (uint32_t i = 0; i < len; i++) {
+//    if (xs[i] < MAX_FLOOR) { // TODO collapse into one line?
+//      histogram[inbuf[i]]++;
+//    }
+//  }
+//}
 
 struct stripped strip(const uint16_t* xs, const uint32_t len, uint32_t* actives) {
   struct stripped s{
@@ -77,7 +89,7 @@ void unstrip(const struct stripped* s, const uint16_t* actives, uint16_t* to) {
   }
 }
 
-struct bitpacked bitpack(const uint32_t* xs, const uint32_t len, uint8_t bits) {
+struct bitpacked bitpack(const uint32_t* xs, const uint32_t len, const uint8_t bits) {
   const uint32_t pack_space = simdpack_compressedbytes(len, bits);
   auto* packed = new uint8_t[pack_space];
   __m128i* end_of_buf = simdpack_length(xs, len, (__m128i*) packed, bits);
@@ -235,6 +247,8 @@ uint64_t read_bitpacked(const char* block, struct bitpacked* b) {
   b->packed = (uint8_t*) (block + offset);
   offset += b->bytes;
 
+  dbg("read:  len=%" PRIu32 " bits=%" PRIu8 " bytes=%" PRIu32, b->len, b->bits, b->bytes);
+
   return offset;
 }
 
@@ -262,22 +276,41 @@ uint16_t read_stripped(const char* block, struct stripped* s) {
   s->lengths = (uint32_t*) (block + offset);
   offset += s->segments * sizeof(s->lengths[0]);
 
+  dbg("read:  total_l=%" PRIu32 " floor=%" PRIu16 " segments=%" PRIu32, s->total_l, s->floor, s->segments);
+
   return offset;
 }
 
-// TODO Should probably be uint32_t instead of size_t
-uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
-  dbg("~");
-  dbg("comp:  len=%zu", len);
+uint64_t uncompressed_size(const struct stripped* s, const struct packed* p) {
+  return
+      sizeof(p->signal.len) + sizeof(p->signal.bits) + sizeof(p->signal.bytes) + p->signal.bytes +
+          sizeof(p->outliers.len) + sizeof(p->outliers.bits) + sizeof(p->outliers.bytes) + p->outliers.bytes +
+          sizeof(s->total_l) + sizeof(s->floor) + sizeof(s->segments) +
+          s->segments * sizeof(s->indices[0]) + s->segments * sizeof(s->lengths[0]);
+}
 
+// Return = 0x00000000 uncompressed Powerstrip
+// Return = 0xffffffff plain uint16_ts
+// Otherwise: original length, before Huffman compression
+
+uint64_t internal_compress(const uint16_t* block, const size_t len, char* out) {
   auto* actives = new uint32_t[len]; // some unfortunate special-casing because we need uint32_t, not uint16_t
-  struct stripped s = strip(block, len, actives);
-  struct packed p = pack(actives, s.actives_l);
+  const struct stripped s = strip(block, len, actives);
+  const struct packed p = pack(actives, s.actives_l);
+
+  const uint64_t size = uncompressed_size(&s, &p);
+
+  // If over BLOCK_SIZE, Huffman coding won't work. Bail out
+  if (size > BLOCK_SIZE) {
+    return 0;
+  }
 
   uint64_t offset = 0;
   offset += write_bitpacked(&p.signal, out + offset);
   offset += write_bitpacked(&p.outliers, out + offset);
   offset += write_stripped(&s, out + offset);
+
+  assert(offset == size);
 
   delete[] actives;
   delete[] s.lengths;
@@ -288,7 +321,47 @@ uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
   return offset;
 }
 
-uint64_t decompress_block(const char* block, const size_t len, uint16_t* out) {
+uint64_t write_tagged(const uint32_t tag, const char* xs, const size_t len, char* to) {
+  uint64_t offset = 0;
+  write_sm(to + offset, offset, uint32_t, tag);
+  std::memcpy(to + offset, xs, len);
+  offset += len;
+  return offset;
+}
+
+// TODO Should probably be uint32_t instead of size_t
+uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
+  dbg("~");
+  dbg("comp:  len=%zu", len);
+
+  auto* uncompressed = new char[BLOCK_SIZE];
+  uint64_t uncompressed_size = internal_compress(block, len, uncompressed);
+
+  if (uncompressed_size == 0) {
+    dbg("compb: tag=0x00000000");
+    uint64_t out_size = write_tagged(0x00000000, reinterpret_cast<const char*>(block), len * sizeof(uint16_t), out);
+    delete[] uncompressed;
+    return out_size;
+  }
+
+  size_t huf_size = HUF_compress(out + sizeof(uint32_t), BLOCK_SIZE, uncompressed, uncompressed_size);
+  if (huf_size == 0 || HUF_isError(huf_size)) {
+    dbg("HUF error: %s", HUF_isError(huf_size) ? HUF_getErrorName(huf_size) : "uncompressible");
+    dbg("compb: tag=0xffffffff uncompressed_size=%" PRIu64, uncompressed_size);
+    uint64_t out_size = write_tagged(0xffffffff, uncompressed, uncompressed_size, out);
+    delete[] uncompressed;
+    return out_size;
+  }
+
+  delete[] uncompressed;
+
+  dbg("compb: tag=%zu", huf_size);
+  uint64_t offset = 0;
+  write_sm(out, offset, uint32_t, (uint32_t) uncompressed_size);
+  return sizeof(uint32_t) + huf_size;
+}
+
+uint64_t decompress_internal(const char* block, const size_t len, uint16_t* out) {
   // TODO initialize these or no? probs no
   struct packed p;
   struct stripped s;
@@ -299,14 +372,34 @@ uint64_t decompress_block(const char* block, const size_t len, uint16_t* out) {
   offset += read_stripped(block + offset, &s);
   assert(offset == len); // We read everything yay
 
-  // TODO uneven len has possibility to break this
-  // TODO or try BLOCK_SIZE? Can we make all mallocs of size BLOCK_SIZE?
   auto* actives = new uint16_t[BLOCK_SIZE / sizeof(uint16_t)];
   unpack(&p, actives);
-
   unstrip(&s, actives, out);
-
   delete[] actives;
 
   return s.total_l;
+}
+
+uint64_t decompress_block(const char* block, const size_t len, uint16_t* out) {
+  uint64_t offset = 0;
+  uint32_t tag;
+  read_sm(block, offset, uint32_t, tag);
+
+  // TODO extract tag values into consts somewhere
+  if (tag == 0x00000000) { // plain uint16s
+    dbg("decob: tag=0x00000000");
+    std::memcpy(out, block + offset, len - offset);
+    return len / sizeof(uint16_t);
+  } else if (tag == 0xffffffff) { // plain powerstripped
+    dbg("decob: tag=0xffffffff");
+    return decompress_internal(block + offset, len - offset, out);
+  } else { // huffman coded and powerstripped
+    dbg("decob: tag=%" PRIu32, tag);
+    char* decomped = new char[BLOCK_SIZE];
+    size_t original_size = HUF_decompress(decomped, tag, block + offset, len - offset);
+    assert(original_size == tag);
+    uint64_t out_size = decompress_internal(decomped, original_size, out);
+    delete[] decomped;
+    return out_size;
+  }
 }
