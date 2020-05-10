@@ -1,11 +1,11 @@
 #include <cstring> // for memcpy
-#include <vector>
-#include <cinttypes> // for printf macros
-#include <powerstrip.h>
+#include <cinttypes> // for printf macros?
 #include <numeric>
 #include <array>
 #include <limits>
 #include <common.h>
+
+#include "powerstrip.h"
 
 #include "../extern/zstd/lib/common/huf.h" // Huffman coding
 #include "../extern/simdcomp/include/simdcomp.h" // for bit-packing
@@ -14,184 +14,92 @@
 
 #define OUTLIER_BITS 17
 
-// TODO namespace?
-// TODO use arena/workspace?
-// TODO replace mallocs with new?
-
-#define write_sm(buf, offset, type, x) do {\
-  (reinterpret_cast<type*>(buf+offset))[0] = x;\
-  offset += sizeof(type);\
-} while(0)
-
-#define write_lg(buf, offset, size, x) do {\
-  memcpy(buf + offset, x, size);\
-  offset += size;\
-} while(0)
-
-#define read_sm(buf, offset, type, x) do {\
-  x = (reinterpret_cast<const type*>(buf + offset))[0];\
-  offset += sizeof(type);\
-} while(0)
-
-uint64_t write(const Stripped &s, const Packed &p, char* to) {
-  size_t offset = 0;
-
-  offset += p.Write(to + offset);
-  offset += s.Write(to + offset);
-
-  return offset;
-}
-
-uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
-  dbg("~");
-  dbg("comp:  len=%zu", len);
-  auto s = Stripped::Strip(block, len);
-  auto p = Packed::Pack(s.GetActives(), s.GetActivesL());
-
-  return write(s, p, out);
-}
-
-uint64_t decompress_block(const char* block, const size_t len, uint16_t* out) {
-  uint64_t offset = 0;
-  Packed p = Packed::Read(block, offset);
-  uint32_t unpacked_l;
-  uint16_t* unpacked = p.Unpack(&unpacked_l);
-  Stripped s = Stripped::Read(block, offset, unpacked, unpacked_l);
-  return s.Unstrip(out);
-}
-
-int Stripped::IsActive(const uint16_t x, const uint16_t floor) {
+bool is_active(const uint16_t x, const uint16_t floor) {
   return x > floor + WINDOW || x < floor - WINDOW;
 }
 
-Stripped Stripped::Strip(const uint16_t* xs, const size_t len) {
-  uint16_t floor = 0; // TODO actually find this
+struct stripped strip(const uint16_t* xs, const uint32_t len, uint32_t* actives) {
+  struct stripped s{
+      .indices = new uint32_t[len],
+      .lengths = new uint32_t[len],
+      .total_l = len,
+  };
+
+  uint16_t floor = 0; // TODO do this
 
   bool was_active = false;
-  uint32_t segment_l = 0;
   uint32_t segments = 0;
+  uint32_t segment_l = 0;
   uint32_t actives_l = 0;
 
-  if (len >= 1) dbg("strip: xs[0]=%" PRIu16 " len=%zu", xs[0], len);
-
-  auto* indices = new uint32_t[len];
-  auto* lengths = new uint32_t[len];
-  auto* actives = new uint16_t[len];
+  if (len >= 1) dbg("strip: xs[0]=%" PRIu16 " len=%" PRIu32, xs[0], len);
 
   for (size_t i = 0; i < len; i++) {
     // TODO consider inverting the nesting so it's more like an FSM
-    if (IsActive(xs[i], floor)) {
+    if (is_active(xs[i], floor)) {
       if (!was_active) {
         segment_l = 0;
-        indices[segments++] = i;
+        s.indices[segments++] = i;
         was_active = true;
       }
       actives[actives_l++] = xs[i];
       segment_l++;
     } else if (was_active) {
-      lengths[segments - 1] = segment_l;
+      s.lengths[segments - 1] = segment_l;
       was_active = false;
     }
   }
 
   if (was_active) {
-    lengths[segments - 1] = segment_l;
+    s.lengths[segments - 1] = segment_l;
   }
 
   dbg("strip: actives_l=%" PRIu32 " segments=%" PRIu32, actives_l, segments);
 
-  return Stripped(len, actives, actives_l, indices, lengths, segments, floor);
+  s.segments = segments;
+  s.actives_l = actives_l;
+  s.floor = floor;
+
+  return s;
 }
 
-uint64_t Stripped::Unstrip(uint16_t* to) {
-  for (uint32_t i = 0; i < total_l; i++) {
-    to[i] = floor;
+void unstrip(const struct stripped* s, const uint16_t* actives, uint16_t* to) {
+  for (uint32_t i = 0; i < s->total_l; i++) {
+    to[i] = s->floor;
   }
 
   uint32_t needle = 0;
-  for (uint32_t i = 0; i < segments; i++) {
-    for (uint32_t j = 0; j < lengths[i]; j++) {
+  for (uint32_t i = 0; i < s->segments; i++) {
+    for (uint32_t j = 0; j < s->lengths[i]; j++) {
       dbg("ustrp: to[indices[%" PRIu32 "]+%" PRIu32 "]=actives[%" PRIu32 "]=%" PRIu16, i, j, needle, actives[needle]);
-      to[indices[i] + j] = actives[needle++];
+      to[s->indices[i] + j] = actives[needle++];
     }
   }
-
-  return total_l;
 }
 
-Stripped::Stripped(uint32_t total_l,
-                   uint16_t* actives,
-                   uint32_t actives_l,
-                   uint32_t* indices,
-                   uint32_t* lengths,
-                   uint32_t segments,
-                   uint16_t floor)
-    : total_l(total_l),
-      actives(actives),
-      actives_l(actives_l),
-      indices(indices),
-      lengths(lengths),
-      segments(segments),
-      floor(floor) {}
-
-uint16_t* Stripped::GetActives() const {
-  return actives;
+struct bitpacked bitpack(const uint32_t* xs, const uint32_t len, uint8_t bits) {
+  const uint32_t pack_space = simdpack_compressedbytes(len, bits);
+  auto* packed = new uint8_t[pack_space];
+  __m128i* end_of_buf = simdpack_length(xs, len, (__m128i*) packed, bits);
+  uint32_t bytes = (end_of_buf - (__m128i*) packed) * sizeof(__m128i);
+  struct bitpacked b{packed, len, bits, bytes};
+  return b;
 }
 
-// TODO hmm a little ugly
-uint32_t Stripped::GetActivesL() const {
-  return actives_l;
+void delta_encode(uint32_t* xs, uint32_t len) {
+  std::adjacent_difference(xs, xs + len, xs);
 }
 
-uint64_t Stripped::Write(char* to) const {
-  uint64_t offset = 0;
+uint8_t best_bits(const int32_t* xs, const uint32_t len) {
+  uint32_t bit_counts[17] = {0};
 
-  dbg("write: total_l=%" PRIu32 " floor=%" PRIu16 " segments=%" PRIu32, total_l, floor, segments);
-  write_sm(to, offset, uint32_t, total_l);
-  write_sm(to, offset, uint16_t, floor);
-  write_sm(to, offset, uint32_t, segments);
-  write_lg(to, offset, segments * sizeof(indices[0]), indices);
-  write_lg(to, offset, segments * sizeof(lengths[0]), lengths);
-
-  return offset;
-}
-
-Stripped Stripped::Read(const char* from, uint64_t &offset, uint16_t* actives, uint32_t actives_l) {
-  uint32_t total_l;
-  read_sm(from, offset, uint32_t, total_l);
-
-  uint16_t floor;
-  read_sm(from, offset, uint16_t, floor);
-
-  uint32_t segments;
-  read_sm(from, offset, uint32_t, segments);
-
-  auto* indices = (uint32_t*) (from + offset);
-  offset += segments * sizeof(uint32_t);
-
-  auto* lengths = (uint32_t*) (from + offset);
-  offset += segments * sizeof(uint32_t);
-
-  return Stripped(total_l, actives, actives_l, indices, lengths, segments, floor);
-}
-
-uint32_t Packed::ZigZag(const int32_t x) {
-  return (x << 1) ^ (x >> 31); // NOLINT(hicpp-signed-bitwise)
-}
-
-int32_t* Packed::DeltaEncode(const uint16_t* xs, const uint32_t len) {
-  auto* diffed = new int32_t[len];
-  std::adjacent_difference(xs, xs + len, diffed);
-  return diffed;
-}
-
-uint8_t Packed::BestBits(const int32_t* xs, const uint32_t len) {
-  std::array<size_t, 17> bit_counts = {}; // TODO replace with calloc?
   for (uint32_t i = 0; i < len; i++) {
     if (xs[i] == 0) { // log2(0) = -inf
       bit_counts[1]++;
     } else {
-      bit_counts[std::log2(std::abs(xs[i])) + 1 + 1]++;
+      // TODO log2 is slow--we can do a bitscan like simdcomp if we do zigzagging earlier
+      const uint8_t needed = std::log2(std::abs(xs[i])) + 1 + 1;
+      bit_counts[needed]++;
     }
   }
 
@@ -210,143 +118,195 @@ uint8_t Packed::BestBits(const int32_t* xs, const uint32_t len) {
   return best_bits;
 }
 
-uint64_t Packed::Write(char* to) const {
-  uint64_t offset = 0;
-
-  offset += signal.Write(to + offset);
-  offset += outliers.Write(to + offset);
-
-  return offset;
+uint32_t zig_zag(const int32_t x) {
+  return (x << 1) ^ (x >> 31); // NOLINT(hicpp-signed-bitwise)
 }
 
-Packed::Packed(const Bitpacked &signal, const Bitpacked &outliers) : signal(signal), outliers(outliers) {}
+int32_t un_zig(const uint32_t x) {
+  return (x >> 1u) ^ -(x & 1u);
+}
 
-Packed Packed::Pack(const uint16_t* xs, const uint32_t len) {
+void unpack(const struct packed* p, uint16_t* actives) {
+  auto* outliers = new uint32_t[p->outliers.len];
+  simdunpack_length(reinterpret_cast<const __m128i*>(p->outliers.packed), p->outliers.len, outliers, p->outliers.bits);
+
+  // TODO would be nice to just unpack into actives but uint32_t != uint16_t :l
+  auto* zigged = new uint32_t[p->signal.len];
+  simdunpack_length(reinterpret_cast<const __m128i*>(p->signal.packed), p->signal.len, zigged, p->signal.bits);
+
+  uint32_t outlier_needle = 0;
+  const uint32_t outlier_marker = 0xffffffff >> (32u - p->signal.bits);
+  uint16_t prev = 0;
+  for (uint32_t i = 0; i < p->signal.len; i++) {
+    int32_t delta;
+    if (zigged[i] == outlier_marker) {
+      delta = un_zig(outliers[outlier_needle++]);
+      dbg("upack: outlier=ye i=%" PRIu32 " prev=%" PRIu32 " delta=%" PRIi32, i, prev, delta);
+    } else {
+      delta = un_zig(zigged[i]);
+      dbg("upack: outlier=no i=%" PRIu32 " prev=%" PRIu32 " delta=%" PRIi32, i, prev, delta);
+    }
+    actives[i] = prev + delta;
+    dbg("upack: xs[%" PRIu32 "]=%" PRIu16, i, actives[i]);
+    prev = actives[i];
+  }
+
+  delete[] zigged;
+  delete[] outliers;
+}
+
+struct packed pack(uint32_t* xs, const uint32_t len) {
   dbg("pack:  len=%" PRIu32, len);
-  int32_t* d_encoded = DeltaEncode(xs, len);
+  delta_encode(xs, len);
+  auto* d_encoded = (int32_t*) xs;
 
-  uint8_t packed_bits = BestBits(d_encoded, len);
+  uint8_t packed_bits = best_bits(d_encoded, len);
 
   const uint32_t outlier_marker = 0xffffffff >> (32u - packed_bits);
   // The marker is 00..0011...11 with bits_needed 1s
   // Would probably work with 11...11 too but I'm scared to try
-  // TODO try ^
+  // TODO try ^ but this is not going to give you more than 1 cycle :l
   // Everything below that top spot is fair game
   const uint32_t bound = outlier_marker - 1;
   dbg("pack:  bound=%" PRIu32, bound);
 
-  // TODO replace with malloc & friends, perhaps
-  std::vector<uint32_t> zigzagged;
-  zigzagged.reserve(len); // TODO is this dumb?
-  std::vector<uint32_t> outlier_list; // TODO initial size, too?
+  // TODO can use xs instead of zigzagged if we are grasping for memory
+  auto* zigzagged = new uint32_t[len];
+  auto* outliers = new uint32_t[len];
+  uint32_t outliers_l = 0;
   for (uint32_t i = 0; i < len; i++) {
-    uint32_t zigged = ZigZag(d_encoded[i]);
+    uint32_t zigged = zig_zag(d_encoded[i]);
     if (zigged > bound) {
-      outlier_list.push_back(zigged);
-      zigzagged.push_back(outlier_marker);
+      outliers[outliers_l++] = zigged;
+      zigzagged[i] = outlier_marker;
     } else {
-      zigzagged.push_back(zigged);
+      zigzagged[i] = zigged;
     }
   }
 
-  dbg("pack:  len(zigzagged)=%zu len(outlier_list)=%zu", zigzagged.size(), outlier_list.size());
+  dbg("pack:  len(zigzagged)=%" PRIu32 " len(outlier_list)=%" PRIu32, len, outliers_l);
 
-  Bitpacked signal = Bitpacked::Pack(zigzagged, packed_bits);
-  Bitpacked outliers = Bitpacked::Pack(outlier_list, 17);
+  struct packed p{
+      .signal = bitpack(zigzagged, len, packed_bits),
+      .outliers = bitpack(outliers, outliers_l, 17),
+  };
 
-  return Packed(signal, outliers);
+  delete[] zigzagged;
+  delete[] outliers;
+
+  return p;
 }
 
-Packed Packed::Read(const char* from, uint64_t &offset) {
-  Bitpacked signal = Bitpacked::Read(from, offset);
-  Bitpacked outliers = Bitpacked::Read(from, offset);
+#define write_sm(buf, offset, type, x) do {\
+  (reinterpret_cast<type*>(buf+offset))[0] = x;\
+  offset += sizeof(type);\
+} while(0)
 
-  return Packed(signal, outliers);
-}
+#define write_lg(buf, offset, size, x) do {\
+  memcpy(buf + offset, x, size);\
+  offset += size;\
+} while (0)
 
-// TODO I feel like the len and pointer are usually reversed?
-uint16_t* Packed::Unpack(uint32_t* len) {
-  uint32_t* u_outliers = outliers.Unpack();
-  uint32_t* zigzagged = signal.Unpack();
-  *len = signal.GetLen();
-  auto* xs = new uint16_t[signal.GetLen()]; // TODO don't love this
+#define read_sm(buf, offset, type, x) do {\
+  x = (reinterpret_cast<const type*>(buf + offset))[0];\
+  offset += sizeof(type);\
+} while(0)
 
-  uint32_t outlier_needle = 0;
-  const uint32_t outlier_marker = 0xffffffff >> (32u - signal.GetBits());
-  uint16_t prev = 0;
-  for (uint32_t i = 0; i < signal.GetLen(); i++) {
-    int32_t delta;
-    if (zigzagged[i] == outlier_marker) {
-      delta = UnZig(u_outliers[outlier_needle++]);
-      dbg("upack: outlier=ye i=%" PRIu32 " prev=%" PRIu32 " delta=%" PRIi32, i, prev, delta);
-    } else {
-      delta = UnZig(zigzagged[i]);
-      dbg("upack: outlier=no i=%" PRIu32 " prev=%" PRIu32 " delta=%" PRIi32, i, prev, delta);
-    }
-    xs[i] = prev + delta;
-    dbg("upack: xs[%" PRIu32 "]=%" PRIu16, i, xs[i]);
-    prev = xs[i];
-  }
-
-  return xs;
-}
-
-int32_t Packed::UnZig(const uint32_t x) {
-  return (x >> 1u) ^ -(x & 1u);
-}
-
-uint64_t Bitpacked::Write(char* to) const {
+// TODO maybe pass by value instead?
+uint64_t write_bitpacked(const struct bitpacked* b, char* to) {
   uint64_t offset = 0;
 
-  dbg("write: len=%" PRIu32 " bits=%" PRIu8 " bytes=%" PRIu32, len, bits, bytes);
+  dbg("write: len=%" PRIu32 " bits=%" PRIu8 " bytes=%" PRIu32, b->len, b->bits, b->bytes);
 
-  write_sm(to, offset, uint32_t, len);
-  write_sm(to, offset, uint8_t, bits);
-  write_sm(to, offset, uint32_t, bytes);
-  write_lg(to, offset, bytes, packed);
+  write_sm(to, offset, uint32_t, b->len);
+  write_sm(to, offset, uint8_t, b->bits);
+  write_sm(to, offset, uint32_t, b->bytes);
+  write_lg(to, offset, b->bytes, b->packed);
 
   return offset;
 }
 
-Bitpacked::Bitpacked(uint8_t* packed, uint32_t len, uint8_t bits, uint32_t bytes)
-    : packed(packed), len(len), bits(bits), bytes(bytes) {}
+uint64_t read_bitpacked(const char* block, struct bitpacked* b) {
+  uint64_t offset = 0;
 
-Bitpacked Bitpacked::Pack(const std::vector<uint32_t> &xs, uint8_t bits) {
-  const uint32_t pack_space = simdpack_compressedbytes(xs.size(), bits);
-  auto* packed = new uint8_t[pack_space];
-  __m128i* end_of_buf = simdpack_length(xs.data(), xs.size(), (__m128i*) packed, bits);
-  uint32_t bytes = (end_of_buf - (__m128i*) packed) * sizeof(__m128i);
-  return Bitpacked(packed, xs.size(), bits, bytes);
+  read_sm(block, offset, uint32_t, b->len);
+  read_sm(block, offset, uint8_t, b->bits);
+  read_sm(block, offset, uint32_t, b->bytes);
+  b->packed = (uint8_t*) (block + offset);
+  offset += b->bytes;
+
+  return offset;
 }
 
-Bitpacked Bitpacked::Read(const char* from, uint64_t &offset) {
-  uint32_t len;
-  read_sm(from, offset, uint32_t, len);
+uint64_t write_stripped(const struct stripped* s, char* to) {
+  uint64_t offset = 0;
 
-  uint8_t bits;
-  read_sm(from, offset, uint8_t, bits);
+  dbg("write: total_l=%" PRIu32 " floor=%" PRIu16 " segments=%" PRIu32, s->total_l, s->floor, s->segments);
+  write_sm(to, offset, uint32_t, s->total_l);
+  write_sm(to, offset, uint16_t, s->floor);
+  write_sm(to, offset, uint32_t, s->segments);
+  write_lg(to, offset, s->segments * sizeof(s->indices[0]), s->indices);
+  write_lg(to, offset, s->segments * sizeof(s->lengths[0]), s->lengths);
 
-  uint32_t bytes;
-  read_sm(from, offset, uint32_t, bytes);
-
-  dbg("read:  len=%" PRIu32 " bits=%" PRIu8 " bytes=%" PRIu32, len, bits, bytes);
-
-  auto* packed = (uint8_t*) (from + offset);
-  offset += bytes;
-
-  return Bitpacked(packed, len, bits, bytes);
+  return offset;
 }
 
-uint32_t* Bitpacked::Unpack() {
-  auto* unpacked = new uint32_t[len];
-  simdunpack_length(reinterpret_cast<const __m128i*>(packed), len, unpacked, bits);
-  return unpacked;
+uint16_t read_stripped(const char* block, struct stripped* s) {
+  uint64_t offset = 0;
+
+  read_sm(block, offset, uint32_t, s->total_l);
+  read_sm(block, offset, uint16_t, s->floor);
+  read_sm(block, offset, uint32_t, s->segments);
+  s->indices = (uint32_t*) (block + offset);
+  offset += s->segments * sizeof(s->indices[0]);
+  s->lengths = (uint32_t*) (block + offset);
+  offset += s->segments * sizeof(s->lengths[0]);
+
+  return offset;
 }
 
-uint8_t Bitpacked::GetBits() const {
-  return bits;
+// TODO Should probably be uint32_t instead of size_t
+uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
+  dbg("~");
+  dbg("comp:  len=%zu", len);
+
+  auto* actives = new uint32_t[len]; // some unfortunate special-casing because we need uint32_t, not uint16_t
+  struct stripped s = strip(block, len, actives);
+  struct packed p = pack(actives, s.actives_l);
+
+  uint64_t offset = 0;
+  offset += write_bitpacked(&p.signal, out + offset);
+  offset += write_bitpacked(&p.outliers, out + offset);
+  offset += write_stripped(&s, out + offset);
+
+  delete[] actives;
+  delete[] s.lengths;
+  delete[] s.indices;
+  delete[] p.signal.packed;
+  delete[] p.outliers.packed;
+
+  return offset;
 }
 
-uint32_t Bitpacked::GetLen() const {
-  return len;
+uint64_t decompress_block(const char* block, const size_t len, uint16_t* out) {
+  // TODO initialize these or no? probs no
+  struct packed p;
+  struct stripped s;
+
+  uint64_t offset = 0;
+  offset += read_bitpacked(block + offset, &p.signal);
+  offset += read_bitpacked(block + offset, &p.outliers);
+  offset += read_stripped(block + offset, &s);
+  assert(offset == len); // We read everything yay
+
+  // TODO uneven len has possibility to break this
+  // TODO or try BLOCK_SIZE? Can we make all mallocs of size BLOCK_SIZE?
+  auto* actives = new uint16_t[BLOCK_SIZE / sizeof(uint16_t)];
+  unpack(&p, actives);
+
+  unstrip(&s, actives, out);
+
+  delete[] actives;
+
+  return s.total_l;
 }

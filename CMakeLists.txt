@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.16)
-#cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.13)
+#cmake_minimum_required(VERSION 3.13)
 project(powerstrip
         VERSION 0.1
         LANGUAGES CXX C)
@@ -39,6 +39,8 @@ target_link_libraries(compress libzstd_static)
 target_link_libraries(compress simdcomp)
 
 add_executable(decompress src/powerstrip.cpp src/decompressbin.cpp)
+target_link_libraries(decompress libzstd_static)
+target_link_libraries(decompress simdcomp)
 
 add_library(powerstrip SHARED src/powerstrip.cpp include/powerstrip.h)
 target_link_libraries(powerstrip libzstd_static)

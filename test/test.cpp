@@ -11,7 +11,7 @@ int main() {
             [](const std::vector<uint16_t> &l0) {
               auto l1 = l0;
               // is the 1000 byte headroom necessary?
-              char* comped = new char[l1.size() * sizeof(uint16_t) + 1000];
+              char* comped = new char[l1.size() * sizeof(uint16_t) * 2 + 1000];
               auto* decomped = new uint16_t[l1.size()];
               const uint64_t len = compress_block(l1.data(), l1.size(), comped);
               const uint64_t size = decompress_block(comped, len, decomped);
@@ -20,6 +20,9 @@ int main() {
                 RC_LOG() << l0[i] << "\t" << decomped[i] << std::endl;
               }
               RC_ASSERT(std::memcmp(l0.data(), decomped, size) == 0);
+
+              delete[] comped;
+              delete[] decomped;
             });
 
   return 0;

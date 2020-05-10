@@ -8,7 +8,7 @@
 #include "common.h"
 #include "powerstrip.h"
 
-int main(int argc, char** argv) {
+int main(const int argc, const char** argv) {
   // TODO replace with help text
   if (argc != 3) {
     std::cerr << "ERR insufficient args" << std::endl;
