@@ -2,16 +2,12 @@
 #include <cstring> // for memcpy
 #include <fstream> // for if,ofstream
 
-#include "../extern/zstd/lib/common/huf.h" // Huffman coding
-#include "../extern/simdcomp/include/simdcomp.h" // for bit-packing
-
-#include "common.h"
 #include "powerstrip.h"
 
 int main(const int argc, const char** argv) {
   // TODO replace with help text
   if (argc != 3) {
-    std::cerr << "ERR insufficient args" << std::endl;
+    std::cout << "ERR insufficient args" << std::endl;
     return -1;
   }
 
@@ -20,7 +16,7 @@ int main(const int argc, const char** argv) {
   std::ifstream i_f(argv[1], std::ios::binary);
   std::ofstream o_f(argv[2], std::ios::binary);
 
-  std::cerr << "Compressing from " << argv[1] << " into " << argv[2] << std::endl;
+  std::cout << "Compressing from " << argv[1] << " into " << argv[2] << std::endl;
 
   char* i_buf = new char[BLOCK_SIZE];
   char* o_buf = new char[BLOCK_SIZE + sizeof(uint32_t)]; // One number of headroom for Huffman length
@@ -30,7 +26,7 @@ int main(const int argc, const char** argv) {
     std::streamsize in_bytes = i_f.gcount();
 
     if (in_bytes % 2 != 0) {
-      std::cerr << "ERR stream ends with half of a uint16" << std::endl;
+      std::cout << "ERR stream ends with half of a uint16" << std::endl;
       return -1;
     }
 
@@ -45,7 +41,7 @@ int main(const int argc, const char** argv) {
   delete[] i_buf;
   delete[] o_buf;
 
-  std::cerr << "Hello, World!" << std::endl;
+  std::cout << "Hello, World!" << std::endl;
 
   return 0;
 }

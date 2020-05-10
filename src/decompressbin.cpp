@@ -1,13 +1,12 @@
 #include <iostream>
 #include <fstream>
 
-#include "common.h"
 #include "powerstrip.h"
 
 int main(const int argc, const char** argv) {
   // TODO replace with help text
   if (argc != 3) {
-    std::cerr << "ERR insufficient args" << std::endl;
+    std::cout << "ERR insufficient args" << std::endl;
     return -1;
   }
 

@@ -5,7 +5,6 @@
 #include <cstring>
 #include <vector>
 #include <algorithm>
-#include <common.h>
 
 int main() {
   rc::check("round-trip yields the same numbers",

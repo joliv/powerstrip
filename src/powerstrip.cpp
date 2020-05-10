@@ -1,9 +1,8 @@
-#include <cstring> // for memcpy
-#include <cinttypes> // for printf macros?
-#include <numeric>
-#include <array>
-#include <limits>
-#include <common.h>
+// Just C dependencies
+#include <cassert>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
 
 #include "powerstrip.h"
 
@@ -17,6 +16,37 @@
 // A floor at this wattage and above won't be found
 #define MAX_FLOOR 1000
 
+#ifndef NDEBUG // cross-plat!
+#define dbg(...) do {\
+    printf("  ");\
+    printf(__VA_ARGS__);\
+    printf("\n");\
+} while(0)
+#else
+#define dbg(...) do {} while(0);
+#endif
+
+struct stripped {
+  uint32_t segments;
+  uint32_t* indices;
+  uint32_t* lengths;
+  uint32_t actives_l;
+  uint16_t floor;
+  uint32_t total_l;
+};
+
+struct bitpacked {
+  uint8_t* packed;
+  uint32_t len;
+  uint8_t bits;
+  uint32_t bytes;
+};
+
+struct packed {
+  struct bitpacked signal;
+  struct bitpacked outliers;
+};
+
 bool is_active(const uint16_t x, const uint16_t floor) {
   return floor == UINT16_MAX || (x > floor + WINDOW || x < floor - WINDOW);
 }
@@ -24,7 +54,8 @@ bool is_active(const uint16_t x, const uint16_t floor) {
 uint16_t find_floor(const uint16_t* xs, const uint32_t len) {
   auto* histogram = static_cast<uint32_t *>(std::calloc(MAX_FLOOR, sizeof(uint32_t)));
   for (uint32_t i = 0; i < len; i++) {
-    if (xs[i] < MAX_FLOOR) { // TODO collapse into one line so no branching?
+    // Can collapse this into one line if the branching is expensive
+    if (xs[i] < MAX_FLOOR) {
       histogram[xs[i]]++;
     }
   }
@@ -56,7 +87,7 @@ struct stripped strip(const uint16_t* xs, const uint32_t len, uint32_t* actives)
       .total_l = len,
   };
 
-  uint16_t floor = find_floor(xs, len); // TODO do this
+  uint16_t floor = find_floor(xs, len);
 
   bool was_active = false;
   uint32_t segments = 0;
@@ -66,7 +97,6 @@ struct stripped strip(const uint16_t* xs, const uint32_t len, uint32_t* actives)
   if (len >= 1) dbg("strip: xs[0]=%" PRIu16 " len=%" PRIu32, xs[0], len);
 
   for (size_t i = 0; i < len; i++) {
-    // TODO consider inverting the nesting so it's more like an FSM
     if (is_active(xs[i], floor)) {
       if (!was_active) {
         segment_l = 0;
@@ -118,7 +148,12 @@ struct bitpacked bitpack(const uint32_t* xs, const uint32_t len, const uint8_t b
 }
 
 void delta_encode(uint32_t* xs, uint32_t len) {
-  std::adjacent_difference(xs, xs + len, xs);
+  int32_t prev = 0;
+  for (uint32_t i = 0; i < len; i++) {
+    int32_t tmp_prev = xs[i];
+    xs[i] -= prev;
+    prev = tmp_prev;
+  }
 }
 
 uint8_t best_bits(const int32_t* xs, const uint32_t len) {
@@ -135,7 +170,7 @@ uint8_t best_bits(const int32_t* xs, const uint32_t len) {
   }
 
   uint8_t best_bits = 0;
-  uint64_t best_size = std::numeric_limits<uint64_t>::max();
+  uint64_t best_size = UINT64_MAX;
   for (uint32_t i = 1; i < 17; i++) {
     bit_counts[i] += bit_counts[i - 1];
     uint64_t size = i * bit_counts[i] + OUTLIER_BITS * (len - bit_counts[i]);
@@ -194,10 +229,6 @@ struct packed pack(uint32_t* xs, const uint32_t len) {
   uint8_t packed_bits = best_bits(d_encoded, len);
 
   const uint32_t outlier_marker = 0xffffffff >> (32u - packed_bits);
-  // The marker is 00..0011...11 with bits_needed 1s
-  // Would probably work with 11...11 too but I'm scared to try
-  // TODO try ^ but this is not going to give you more than 1 cycle :l
-  // Everything below that top spot is fair game
   const uint32_t bound = outlier_marker - 1;
   dbg("pack:  bound=%" PRIu32, bound);
 
@@ -243,7 +274,6 @@ struct packed pack(uint32_t* xs, const uint32_t len) {
   offset += sizeof(type);\
 } while(0)
 
-// TODO maybe pass by value instead?
 uint64_t write_bitpacked(const struct bitpacked* b, char* to) {
   uint64_t offset = 0;
 
@@ -382,15 +412,14 @@ uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
 }
 
 uint64_t decompress_internal(const char* block, const size_t len, uint16_t* out) {
-  // TODO initialize these or no? probs no
-  struct packed p;
-  struct stripped s;
+  struct packed p; // NOLINT(cppcoreguidelines-pro-type-member-init)
+  struct stripped s; // NOLINT(cppcoreguidelines-pro-type-member-init)
 
   uint64_t offset = 0;
   offset += read_bitpacked(block + offset, &p.signal);
   offset += read_bitpacked(block + offset, &p.outliers);
   offset += read_stripped(block + offset, &s);
-  assert(offset == len); // We read everything yay
+  assert(offset == len);
 
   auto* actives = new uint16_t[BLOCK_SIZE / sizeof(uint16_t)];
   unpack(&p, actives);
