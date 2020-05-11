@@ -1,6 +1,8 @@
 // Just C dependencies
 #include <cassert>
+#include <cinttypes>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -9,7 +11,7 @@
 #include "../extern/zstd/lib/common/huf.h" // Huffman coding
 #include "../extern/simdcomp/include/simdcomp.h" // for bit-packing
 
-#define WINDOW 0
+#define WINDOW 3
 
 #define OUTLIER_BITS 17
 
@@ -18,9 +20,9 @@
 
 #ifndef NDEBUG // cross-plat!
 #define dbg(...) do {\
-    printf("  ");\
-    printf(__VA_ARGS__);\
-    printf("\n");\
+    std::printf("  ");\
+    std::printf(__VA_ARGS__);\
+    std::printf("\n");\
 } while(0)
 #else
 #define dbg(...) do {} while(0);
@@ -52,7 +54,7 @@ bool is_active(const uint16_t x, const uint16_t floor) {
 }
 
 uint16_t find_floor(const uint16_t* xs, const uint32_t len) {
-  auto* histogram = static_cast<uint32_t *>(std::calloc(MAX_FLOOR, sizeof(uint32_t)));
+  auto* histogram = static_cast<uint32_t*>(std::calloc(MAX_FLOOR, sizeof(uint32_t)));
   for (uint32_t i = 0; i < len; i++) {
     // Can collapse this into one line if the branching is expensive
     if (xs[i] < MAX_FLOOR) {
@@ -393,7 +395,8 @@ uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
     return out_size;
   }
 
-  size_t huf_size = HUF_compress(out + sizeof(uint32_t), OUTPUT_SIZE - sizeof(uint32_t), uncompressed, uncompressed_size);
+  size_t
+      huf_size = HUF_compress(out + sizeof(uint32_t), OUTPUT_SIZE - sizeof(uint32_t), uncompressed, uncompressed_size);
   if (huf_size == 0 || HUF_isError(huf_size)) {
     dbg("HUF error: %s", HUF_isError(huf_size) ? HUF_getErrorName(huf_size) : "uncompressible");
     dbg("srcSize=%zu", (size_t) uncompressed_size);

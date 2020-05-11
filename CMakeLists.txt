@@ -34,13 +34,13 @@ add_library(simdcomp STATIC ${SIMDCOMP_SOURCES})
 
 include_directories(include)
 
-add_executable(compress src/powerstrip.cpp src/compressbin.cpp)
-target_link_libraries(compress libzstd_static)
-target_link_libraries(compress simdcomp)
+add_executable(pstrip src/powerstrip.cpp src/compressbin.cpp)
+target_link_libraries(pstrip libzstd_static)
+target_link_libraries(pstrip simdcomp)
 
-add_executable(decompress src/powerstrip.cpp src/decompressbin.cpp)
-target_link_libraries(decompress libzstd_static)
-target_link_libraries(decompress simdcomp)
+add_executable(unpstrip src/powerstrip.cpp src/decompressbin.cpp)
+target_link_libraries(unpstrip libzstd_static)
+target_link_libraries(unpstrip simdcomp)
 
 add_library(powerstrip SHARED src/powerstrip.cpp include/powerstrip.h)
 target_link_libraries(powerstrip libzstd_static)
