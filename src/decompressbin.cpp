@@ -10,13 +10,11 @@ int main(const int argc, const char** argv) {
     return -1;
   }
 
-  // ifstream is pretty fast!
-  // https://lemire.me/blog/2012/06/26/which-is-fastest-read-fread-ifstream-or-mmap/
   std::ifstream i_f(argv[1], std::ios::binary);
   std::ofstream o_f(argv[2], std::ios::binary);
 
-  auto* in_buf = new char[BLOCK_SIZE];
-  auto* out_buf = new uint16_t[BLOCK_SIZE / sizeof(uint16_t)];
+  auto* in_buf = new char[OUTPUT_SIZE];
+  auto* out_buf = new uint16_t[INPUT_SIZE / sizeof(uint16_t)];
 
   while (!i_f.eof()) {
     uint64_t block_len;

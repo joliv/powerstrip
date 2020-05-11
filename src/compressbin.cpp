@@ -11,18 +11,18 @@ int main(const int argc, const char** argv) {
     return -1;
   }
 
-  // ifstream is pretty fast!
+  // ifstream is quite fast:
   // https://lemire.me/blog/2012/06/26/which-is-fastest-read-fread-ifstream-or-mmap/
   std::ifstream i_f(argv[1], std::ios::binary);
   std::ofstream o_f(argv[2], std::ios::binary);
 
   std::cout << "Compressing from " << argv[1] << " into " << argv[2] << std::endl;
 
-  char* i_buf = new char[BLOCK_SIZE];
-  char* o_buf = new char[BLOCK_SIZE + sizeof(uint32_t)]; // One number of headroom for Huffman length
+  char* i_buf = new char[INPUT_SIZE];
+  char* o_buf = new char[OUTPUT_SIZE]; // One number of headroom for Huffman length
 
   while (!i_f.eof()) {
-    i_f.read(i_buf, BLOCK_SIZE);
+    i_f.read(i_buf, INPUT_SIZE);
     std::streamsize in_bytes = i_f.gcount();
 
     if (in_bytes % 2 != 0) {

@@ -9,7 +9,7 @@
 #include "../extern/zstd/lib/common/huf.h" // Huffman coding
 #include "../extern/simdcomp/include/simdcomp.h" // for bit-packing
 
-#define WINDOW 3
+#define WINDOW 0
 
 #define OUTLIER_BITS 17
 
@@ -338,8 +338,8 @@ uint64_t uncompressed_size(const struct stripped* s, const struct packed* p) {
           s->segments * sizeof(s->indices[0]) + s->segments * sizeof(s->lengths[0]);
 }
 
-// Return = 0x00000000 uncompressed Powerstrip
-// Return = 0xffffffff plain uint16_ts
+// Return = 0xffffffff uncompressed Powerstrip
+// Return = 0x00000000 plain uint16_ts
 // Otherwise: original length, before Huffman compression
 
 uint64_t internal_compress(const uint16_t* block, const size_t len, char* out) {
@@ -349,8 +349,8 @@ uint64_t internal_compress(const uint16_t* block, const size_t len, char* out) {
 
   const uint64_t size = uncompressed_size(&s, &p);
 
-  // If over BLOCK_SIZE, Huffman coding won't work. Bail out
-  if (size > BLOCK_SIZE) {
+  // If over INPUT_SIZE, we didn't do a good job. Just return plain uint16s
+  if (size > INPUT_SIZE) {
     return 0;
   }
 
@@ -383,7 +383,7 @@ uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
   dbg("~");
   dbg("comp:  len=%zu", len);
 
-  auto* uncompressed = new char[BLOCK_SIZE];
+  auto* uncompressed = new char[INPUT_SIZE];
   uint64_t uncompressed_size = internal_compress(block, len, uncompressed);
 
   if (uncompressed_size == 0) {
@@ -393,7 +393,7 @@ uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
     return out_size;
   }
 
-  size_t huf_size = HUF_compress(out + sizeof(uint32_t), BLOCK_SIZE, uncompressed, uncompressed_size);
+  size_t huf_size = HUF_compress(out + sizeof(uint32_t), OUTPUT_SIZE - sizeof(uint32_t), uncompressed, uncompressed_size);
   if (huf_size == 0 || HUF_isError(huf_size)) {
     dbg("HUF error: %s", HUF_isError(huf_size) ? HUF_getErrorName(huf_size) : "uncompressible");
     dbg("srcSize=%zu", (size_t) uncompressed_size);
@@ -421,7 +421,7 @@ uint64_t decompress_internal(const char* block, const size_t len, uint16_t* out)
   offset += read_stripped(block + offset, &s);
   assert(offset == len);
 
-  auto* actives = new uint16_t[BLOCK_SIZE / sizeof(uint16_t)];
+  auto* actives = new uint16_t[INPUT_SIZE / sizeof(uint16_t)];
   unpack(&p, actives);
   unstrip(&s, actives, out);
   delete[] actives;
@@ -444,7 +444,7 @@ uint64_t decompress_block(const char* block, const size_t len, uint16_t* out) {
     return decompress_internal(block + offset, len - offset, out);
   } else { // huffman coded and powerstripped
     dbg("decob: tag=%" PRIu32, tag);
-    char* decomped = new char[BLOCK_SIZE];
+    char* decomped = new char[INPUT_SIZE];
     size_t original_size = HUF_decompress(decomped, tag, block + offset, len - offset);
     assert(original_size == tag);
     uint64_t out_size = decompress_internal(decomped, original_size, out);

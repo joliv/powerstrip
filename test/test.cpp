@@ -11,7 +11,7 @@ int main() {
             [](const std::vector<uint16_t> &l0) {
               auto l1 = l0;
               // is the 1000 byte headroom necessary?
-              char* comped = new char[BLOCK_SIZE + sizeof(uint32_t)];
+              char* comped = new char[OUTPUT_SIZE];
               auto* decomped = new uint16_t[l1.size()];
               const uint64_t len = compress_block(l1.data(), l1.size(), comped);
               std::cout << "len=" << len << std::endl;
