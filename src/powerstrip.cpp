@@ -1,10 +1,12 @@
 // Just C dependencies
 #include <cassert>
-#include <cinttypes>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+// Used in debug mode
+#include <cinttypes>
+#include <cstdio>
 
 #include "powerstrip.h"
 
@@ -56,7 +58,6 @@ bool is_active(const uint16_t x, const uint16_t floor) {
 uint16_t find_floor(const uint16_t* xs, const uint32_t len) {
   auto* histogram = static_cast<uint32_t*>(std::calloc(MAX_FLOOR, sizeof(uint32_t)));
   for (uint32_t i = 0; i < len; i++) {
-    // Can collapse this into one line if the branching is expensive
     if (xs[i] < MAX_FLOOR) {
       histogram[xs[i]]++;
     }
@@ -336,10 +337,6 @@ uint64_t uncompressed_size(const struct stripped* s, const struct packed* p) {
           sizeof(s->total_l) + sizeof(s->floor) + sizeof(s->segments) +
           s->segments * sizeof(s->indices[0]) + s->segments * sizeof(s->lengths[0]);
 }
-
-// Return = 0xffffffff uncompressed Powerstrip
-// Return = 0x00000000 plain uint16_ts
-// Otherwise: original length, before Huffman compression
 
 uint64_t internal_compress(const uint16_t* block, const size_t len, char* out) {
   auto* actives = new uint32_t[len]; // some unfortunate special-casing because we need uint32_t, not uint16_t
