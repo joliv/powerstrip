@@ -16,7 +16,6 @@ void print_usage(const char* exec) {
 }
 
 int main(const int argc, const char** argv) {
-  // TODO replace with help text
   if (argc != 3) {
     std::cout << "ERROR insufficient args" << std::endl;
     print_usage(argv[0]);

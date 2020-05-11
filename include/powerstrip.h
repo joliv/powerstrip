@@ -21,4 +21,4 @@ uint64_t compress_block(const uint16_t* block, size_t len, char* out);
 // returns: the size of the uncompressed data, in bytes
 uint64_t decompress_block(const char* block, size_t len, uint16_t* out);
 
-#endif //POWERSTRIP_INCLUDE_POWERSTRIP_H_
+#endif // POWERSTRIP_INCLUDE_POWERSTRIP_H_

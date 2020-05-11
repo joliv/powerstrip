@@ -165,7 +165,6 @@ uint8_t best_bits(const int32_t* xs, const uint32_t len) {
     if (xs[i] == 0) { // log2(0) = -inf
       bit_counts[1]++;
     } else {
-      // TODO log2 is slow--we can do a bitscan like simdcomp if we do zigzagging earlier
       const uint8_t needed = std::log2(std::abs(xs[i])) + 1 + 1;
       bit_counts[needed]++;
     }
@@ -198,7 +197,6 @@ void unpack(const struct packed* p, uint16_t* actives) {
   auto* outliers = new uint32_t[p->outliers.len];
   simdunpack_length(reinterpret_cast<const __m128i*>(p->outliers.packed), p->outliers.len, outliers, p->outliers.bits);
 
-  // TODO would be nice to just unpack into actives but uint32_t != uint16_t :l
   auto* zigged = new uint32_t[p->signal.len];
   simdunpack_length(reinterpret_cast<const __m128i*>(p->signal.packed), p->signal.len, zigged, p->signal.bits);
 
@@ -234,7 +232,6 @@ struct packed pack(uint32_t* xs, const uint32_t len) {
   const uint32_t bound = outlier_marker - 1;
   dbg("pack:  bound=%" PRIu32, bound);
 
-  // TODO can use xs instead of zigzagged if we are grasping for memory
   auto* zigzagged = new uint32_t[len];
   auto* outliers = new uint32_t[len];
   uint32_t outliers_l = 0;
@@ -380,7 +377,6 @@ uint64_t write_tagged(const uint32_t tag, const char* xs, const size_t len, char
   return offset;
 }
 
-// TODO Should probably be uint32_t instead of size_t
 uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
   dbg("~");
   dbg("comp:  len=%zu", len);
@@ -437,7 +433,6 @@ uint64_t decompress_block(const char* block, const size_t len, uint16_t* out) {
   uint32_t tag;
   read_sm(block, offset, uint32_t, tag);
 
-  // TODO extract tag values into consts somewhere
   if (tag == 0x00000000) { // plain uint16s
     dbg("decob: tag=0x00000000");
     std::memcpy(out, block + offset, len - offset);
