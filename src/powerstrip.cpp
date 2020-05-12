@@ -314,7 +314,7 @@ uint64_t write_stripped(const struct stripped* s, char* to) {
   return offset;
 }
 
-uint16_t read_stripped(const char* block, struct stripped* s) {
+uint64_t read_stripped(const char* block, struct stripped* s) {
   uint64_t offset = 0;
 
   read_sm(block, offset, uint32_t, s->total_l);
@@ -368,7 +368,7 @@ uint64_t internal_compress(const uint16_t* block, const size_t len, char* out) {
 
 uint64_t write_tagged(const uint32_t tag, const char* xs, const size_t len, char* to) {
   uint64_t offset = 0;
-  write_sm(to + offset, offset, uint32_t, tag);
+  write_sm(to, offset, uint32_t, tag);
   std::memcpy(to + offset, xs, len);
   offset += len;
   return offset;
@@ -401,7 +401,7 @@ uint64_t compress_block(const uint16_t* block, const size_t len, char* out) {
 
   delete[] uncompressed;
 
-  dbg("compb: tag=%zu", huf_size);
+  dbg("compb: tag=%" PRIu64, uncompressed_size);
   uint64_t offset = 0;
   write_sm(out, offset, uint32_t, (uint32_t) uncompressed_size);
   return sizeof(uint32_t) + huf_size;
@@ -433,7 +433,7 @@ uint64_t decompress_block(const char* block, const size_t len, uint16_t* out) {
   if (tag == 0x00000000) { // plain uint16s
     dbg("decob: tag=0x00000000");
     std::memcpy(out, block + offset, len - offset);
-    return len / sizeof(uint16_t);
+    return (len - offset) / sizeof(uint16_t);
   } else if (tag == 0xffffffff) { // plain powerstripped
     dbg("decob: tag=0xffffffff");
     return decompress_internal(block + offset, len - offset, out);
