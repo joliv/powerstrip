@@ -1,6 +1,0 @@
-[submodule "vendor/simdcomp"]
-	path = vendor/simdcomp
-	url = https://github.com/lemire/simdcomp
-[submodule "vendor/zstd"]
-	path = vendor/zstd
-	url = https://github.com/facebook/zstd
