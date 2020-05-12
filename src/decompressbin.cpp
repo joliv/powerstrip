@@ -34,7 +34,7 @@ int main(const int argc, const char** argv) {
     return -1;
   }
 
-  std::cout << "Decompression " << argv[1] << " into " << argv[2] << std::endl;
+  std::cout << "Decompressing " << argv[1] << " into " << argv[2] << std::endl;
 
   auto* in_buf = new char[OUTPUT_SIZE];
   auto* out_buf = new uint16_t[INPUT_SIZE / sizeof(uint16_t)];
