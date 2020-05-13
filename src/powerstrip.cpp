@@ -345,8 +345,8 @@ uint64_t internal_compress(const uint16_t* block, const size_t len, char* out) {
 
   const uint64_t size = uncompressed_size(&s, &p);
 
-  // If over INPUT_SIZE, we didn't do a good job. Just return plain uint16s
-  if (size > INPUT_SIZE) {
+  // If over the input size, we didn't do a good job. Just return plain uint16s
+  if (size > len * sizeof(uint16_t)) {
     return 0;
   }
 
