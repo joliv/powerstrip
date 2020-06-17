@@ -1,4 +1,8 @@
-# Powerstrip ⚡
+<p align="center"><img src="powerstrip.png" align="center" width="300px"></p>
+
+Powerstrip is an integer compression algorithm designed for energy meter data, particularly for device-level or circuit-level data. It provides high compression ratios, rapid compression and decompression speeds, and nearly zero lossiness.
+
+See the [Powerstrip paper](https://www.bowdoin.edu/~sbarker/research/pdf/eenergy20-powerstrip.pdf) for details, which appeared at [ACM e-Energy 2020](https://energy.acm.org/conferences/eenergy/2020/).
 
 Quick-start for an out-of-source build:
 
